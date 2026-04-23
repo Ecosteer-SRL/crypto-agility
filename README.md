@@ -372,7 +372,7 @@ terms, one possible way to achieve a high degree of cipher agility in a
 live system. Its objective is not merely to abstract cipher calls, but
 to enable the runtime replacement, coexistence, rotation, installation,
 and long-term evolution of cryptographic providers without requiring
-redesign of the surrounding Ecosteer DVCO (Data Visibility COntrol Overlay) stack. 
+redesign of the surrounding Ecosteer DVCO (Data Visibility Control Overlay) stack. 
 In this sense, the project can be read as a pragmatic architectural response 
 to the broader problem of cryptographic agility.
 
