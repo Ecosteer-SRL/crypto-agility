@@ -1,7 +1,7 @@
-// ver:  1.0
-// auth: graz
-// date: 12/11/2025
-
+// SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
+// SPDX-FileCopyrightText: 2026 Ecosteer srl
+// SPDX-License-Identifier: MIT
+// ver: 1.0
 
 #ifndef DOP_PADDING_H
 #define DOP_PADDING_H
