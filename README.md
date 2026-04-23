@@ -11,6 +11,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [2 Core Concepts 7](#core-concepts)
 
+<!--
 [2.1 Provider metadata 7](#provider-metadata)
 
 [2.2 Provider instance state 7](#provider-instance-state)
@@ -21,17 +22,17 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [2.5 Provider-owned ciphertext framing
 8](#provider-owned-ciphertext-framing)
-
+-->
 [3 ABI Versioning and Common Types 8](#abi-versioning-and-common-types)
-
+<!--
 [3.1 ABI version 8](#abi-version)
 
 [3.2 Return codes 8](#return-codes)
 
 [3.3 Buffer helper 10](#buffer-helper)
-
+-->
 [4 Provider Metadata Contract 10](#provider-metadata-contract)
-
+<!--
 [4.1 Purpose 10](#purpose)
 
 [4.2 When it is called 10](#when-it-is-called)
@@ -45,12 +46,12 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 [4.6 Padding metadata 11](#padding-metadata)
 
 [4.7 Error conditions 11](#error-conditions)
-
+-->
 [5 Lifecycle and State Model 11](#lifecycle-and-state-model)
 
 [6 Full Vtable reference (Cipher Provider Interface)
 11](#full-vtable-reference-cipher-provider-interface)
-
+<!--
 [6.1 Get\_info 12](#get_info)
 
 [6.1.1 Signature 12](#signature)
@@ -261,11 +262,11 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 [6.14.5 Recommendation 25](#recommendation-1)
 
 [6.14.6 Limitations 25](#limitations)
-
+-->
 [7 Buffer and Output Conventions 26](#buffer-and-output-conventions)
 
 [8 Shareable vs Private Semantics 26](#shareable-vs-private-semantics)
-
+<!--
 [8.1 Shareable means 26](#shareable-means)
 
 [8.2 Private means 26](#private-means)
@@ -276,13 +277,13 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 27](#what-subscriber-install-expects)
 
 [8.5 What compare\_\* should verify 27](#what-compare_-should-verify)
-
+-->
 [9 Padding Contract 27](#padding-contract)
-
+<!--
 [9.1 Provider responsibility 28](#provider-responsibility)
-
+-->
 [10 Encrypt/Decrypt Contract 28](#encryptdecrypt-contract)
-
+<!--
 [10.1 Mandatory rule 28](#mandatory-rule)
 
 [10.2 Outer layer assumptions 28](#outer-layer-assumptions)
@@ -292,10 +293,10 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 [10.4 AAD behavior 29](#aad-behavior)
 
 [10.5 AEAD behavior 29](#aead-behavior)
-
+-->
 [11 Error Model and State Semantics
 29](#error-model-and-state-semantics)
-
+<!--
 [11.1 Invalid argument failures 29](#invalid-argument-failures)
 
 [11.2 Bad state failures 30](#bad-state-failures)
@@ -312,12 +313,12 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 31](#feature-exists-in-abi-but-not-in-this-provider.)
 
 [11.8 last\_error guidance 31](#last_error-guidance)
-
+-->
 [12 Plugin Entry Point 31](#plugin-entry-point)
 
 [13 Provider Implementation Checklist
 32](#provider-implementation-checklist)
-
+<!--
 [13.1 Step 1: define provider identity
 32](#step-1-define-provider-identity)
 
@@ -353,9 +354,9 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [13.13 Step 13: verify interoperability
 33](#step-13-verify-interoperability)
-
+-->
 [14 Example Provider Classes 34](#example-provider-classes)
-
+<!--
 [14.1 Padded block cipher provider 34](#padded-block-cipher-provider)
 
 [14.2 Non-padded stream-like provider
@@ -365,7 +366,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [15 Final Notes for Provider Authors
 35](#final-notes-for-provider-authors)
-
+-->
 # Overview
 
 This framework was conceived to explore, in practical implementation
