@@ -1,6 +1,11 @@
 <p align="left">
   <img src="docs/media/ecosteer-logo.png" alt="Ecosteer logo" width="220">
 </p>
+<p>
+<h2>
+A framework for runtime replacement, coexistence, rotation, installation, and long-term evolution of cryptographic providers
+</h2>
+</p>
 
 [1 Overview 6](#overview)
 
