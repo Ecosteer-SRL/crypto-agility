@@ -1,4 +1,4 @@
-<p align="center">
+<p align="left">
   <img src="docs/media/ecosteer-logo.png" alt="Ecosteer logo" width="220">
 </p>
 
