@@ -459,6 +459,11 @@ reason, the implementations provided here are based on existing
 specifications, technical documentation, and available open-source code,
 and should be read in that context.
 
+Concrete provider implementations may depend on external cryptographic libraries 
+such as OpenSSL or other third-party components. Such dependencies are implementation-specific 
+and should be documented together with their corresponding build, runtime, and licensing 
+requirements.
+
 # Core Concepts
 
 ## Provider metadata
