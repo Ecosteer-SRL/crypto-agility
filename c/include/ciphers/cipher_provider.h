@@ -1,3 +1,9 @@
+
+// SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
+// SPDX-FileCopyrightText: 2026 Ecosteer srl
+// SPDX-License-Identifier: MIT
+// ver: 1.0
+
 #ifndef DVCO_CIPHER_PROVIDER_H
 #define DVCO_CIPHER_PROVIDER_H
 
@@ -8,15 +14,6 @@
  * -------
  * Runtime-loadable cipher plugins (.so / shared libraries) used by DVCO publishers/subscribers.
  *
- * Notes
- * -----
- * - The DVCO protocol framing does NOT change.
- * - The "key" field in DVCO_PUB_KEYSET / DVCO_SUB_KEYGET transports the "shareable representation"
- *   produced by this API (selectors + provider opaque bytes).
- * - Integrity provider is currently fixed to CRC16 (existing implementation), therefore this header
- *   only defines the Cipher Provider API.
- * - This v1 API is designed for the immediate AES migration path (symmetric payload ciphers).
- * - Future extensions (AEAD, asym/hybrid capabilities, encoding provider) can be added later.
  */
 
 #include <stdint.h>
