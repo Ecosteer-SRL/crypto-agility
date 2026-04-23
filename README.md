@@ -1,4 +1,6 @@
-![Ecosteer logo](docs/media/ecosteer-logo.png)
+<p align="center">
+  <img src="docs/media/ecosteer-logo.png" alt="Ecosteer logo" width="220">
+</p>
 
 [1 Overview 6](#overview)
 
