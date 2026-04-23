@@ -435,10 +435,11 @@ conceptually and practically. At the conceptual level, the provider ABI
 and vtable have been designed to be sufficiently general-purpose to
 support heterogeneous cipher families and provider-specific framing,
 serialization, and state-management models without redesign of the outer
-stack. At the practical level, this is no longer a purely theoretical
-architecture: the provider framework and the associated software have
-been implemented, exercised with multiple cipher families, and validated
-through end-to-end tests.
+stack. 
+
+At the practical level, this is no longer a purely theoretical architecture: the provider framework and the associated software have been implemented, exercised with multiple cipher families, and validated through end-to-end tests. As a result, the DVCO stack, on both the publisher and subscriber side, is now able to rotate not only cryptographic keys within a given provider, but also the cipher providers themselves. 
+
+In other words, the framework extends rotation from key material alone to the cipher layer, enabling practical cipher agility within a stable outer protocol.
 
 A final clarification is important. The purpose of this project is not
 to invent or standardize ciphers, but to design and implement a
