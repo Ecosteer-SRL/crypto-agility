@@ -1,3 +1,5 @@
+![Ecosteer logo](docs/media/ecosteer-logo.png)
+
 [1 Overview 6](#overview)
 
 [2 Core Concepts 7](#core-concepts)
