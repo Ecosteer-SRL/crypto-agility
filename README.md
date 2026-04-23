@@ -378,8 +378,8 @@ be read as a pragmatic architectural response to the broader problem of
 cryptographic agility.
 
 This direction appears strongly convergent with the perspective later
-articulated by NIST in December 2025 in CSWP 39, Considerations for
-Achieving Cryptographic Agility: Strategies and Practices. NIST frames
+articulated by NIST in [December 2025 in CSWP 39, Considerations for
+Achieving Cryptographic Agility: Strategies and Practices](https://csrc.nist.gov/pubs/cswp/39/considerations-for-achieving-cryptographic-agility/final). NIST frames
 cryptographic agility as the capability to replace and adapt
 cryptographic algorithms while preserving security and ongoing
 operations. The DVCO cipher provider framework explores one concrete
