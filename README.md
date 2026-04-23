@@ -49,8 +49,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 -->
 [5 Lifecycle and State Model](#lifecycle-and-state-model)
 
-[6 Full Vtable reference (Cipher Provider Interface)
-11](#full-vtable-reference-cipher-provider-interface)
+[6 Full Vtable reference (Cipher Provider Interface)](#full-vtable-reference-cipher-provider-interface)
 <!--
 [6.1 Get\_info 12](#get_info)
 
@@ -294,8 +293,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [10.5 AEAD behavior 29](#aead-behavior)
 -->
-[11 Error Model and State Semantics
-29](#error-model-and-state-semantics)
+[11 Error Model and State Semantics](#error-model-and-state-semantics)
 <!--
 [11.1 Invalid argument failures 29](#invalid-argument-failures)
 
