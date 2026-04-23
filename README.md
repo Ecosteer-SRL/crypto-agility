@@ -7,9 +7,9 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 </h2>
 </p>
 
-[1 Overview 6](#overview)
+[1 Overview](#overview)
 
-[2 Core Concepts 7](#core-concepts)
+[2 Core Concepts](#core-concepts)
 
 <!--
 [2.1 Provider metadata 7](#provider-metadata)
@@ -23,7 +23,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 [2.5 Provider-owned ciphertext framing
 8](#provider-owned-ciphertext-framing)
 -->
-[3 ABI Versioning and Common Types 8](#abi-versioning-and-common-types)
+[3 ABI Versioning and Common Types](#abi-versioning-and-common-types)
 <!--
 [3.1 ABI version 8](#abi-version)
 
@@ -31,7 +31,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [3.3 Buffer helper 10](#buffer-helper)
 -->
-[4 Provider Metadata Contract 10](#provider-metadata-contract)
+[4 Provider Metadata Contract](#provider-metadata-contract)
 <!--
 [4.1 Purpose 10](#purpose)
 
@@ -47,7 +47,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [4.7 Error conditions 11](#error-conditions)
 -->
-[5 Lifecycle and State Model 11](#lifecycle-and-state-model)
+[5 Lifecycle and State Model](#lifecycle-and-state-model)
 
 [6 Full Vtable reference (Cipher Provider Interface)
 11](#full-vtable-reference-cipher-provider-interface)
@@ -263,9 +263,9 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [6.14.6 Limitations 25](#limitations)
 -->
-[7 Buffer and Output Conventions 26](#buffer-and-output-conventions)
+[7 Buffer and Output Conventions](#buffer-and-output-conventions)
 
-[8 Shareable vs Private Semantics 26](#shareable-vs-private-semantics)
+[8 Shareable vs Private Semantics](#shareable-vs-private-semantics)
 <!--
 [8.1 Shareable means 26](#shareable-means)
 
@@ -278,11 +278,11 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [8.5 What compare\_\* should verify 27](#what-compare_-should-verify)
 -->
-[9 Padding Contract 27](#padding-contract)
+[9 Padding Contract](#padding-contract)
 <!--
 [9.1 Provider responsibility 28](#provider-responsibility)
 -->
-[10 Encrypt/Decrypt Contract 28](#encryptdecrypt-contract)
+[10 Encrypt/Decrypt Contract](#encryptdecrypt-contract)
 <!--
 [10.1 Mandatory rule 28](#mandatory-rule)
 
@@ -314,7 +314,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 
 [11.8 last\_error guidance 31](#last_error-guidance)
 -->
-[12 Plugin Entry Point 31](#plugin-entry-point)
+[12 Plugin Entry Point](#plugin-entry-point)
 
 [13 Provider Implementation Checklist
 32](#provider-implementation-checklist)
@@ -355,7 +355,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 [13.13 Step 13: verify interoperability
 33](#step-13-verify-interoperability)
 -->
-[14 Example Provider Classes 34](#example-provider-classes)
+[14 Example Provider Classes](#example-provider-classes)
 <!--
 [14.1 Padded block cipher provider 34](#padded-block-cipher-provider)
 
