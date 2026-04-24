@@ -1,14 +1,13 @@
-<p align="left">
+e<p align="left">
   <img src="docs/media/ecosteer-logo.png" alt="Ecosteer logo" width="220">
 </p>
 <p>
 <h2>
-A framework for runtime replacement, coexistence, rotation, installation, and long-term evolution of cryptographic providers
+A framework for runtime replacement, coexistence, rotation, installation, and long-term evolution of cryptographic providers.
 </h2>
 </p>
 
 [1 Overview](#overview)
-
 [2 Core Concepts](#core-concepts)
 
 <!--
@@ -24,6 +23,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 8](#provider-owned-ciphertext-framing)
 -->
 [3 ABI Versioning and Common Types](#abi-versioning-and-common-types)
+
 <!--
 [3.1 ABI version 8](#abi-version)
 
@@ -32,6 +32,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 [3.3 Buffer helper 10](#buffer-helper)
 -->
 [4 Provider Metadata Contract](#provider-metadata-contract)
+
 <!--
 [4.1 Purpose 10](#purpose)
 
@@ -314,8 +315,7 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 -->
 [12 Plugin Entry Point](#plugin-entry-point)
 
-[13 Provider Implementation Checklist
-32](#provider-implementation-checklist)
+[13 Provider Implementation Checklist](#provider-implementation-checklist)
 <!--
 [13.1 Step 1: define provider identity
 32](#step-1-define-provider-identity)
@@ -701,8 +701,13 @@ On success, out\_info must be fully initialized with:
 
 The provider must return stable metadata for the implementation.
 
-**cid** is the fixed selector identifying the provider family and must
-remain consistent with marketplace/domain mapping used by the stack.
+On success, **out_info** must be fully initialized with the provider metadata required by the stack: ABI version (**abi_major**, **abi_minor**), descriptive identity fields (**provider_name**, **provider_version**, **provider_desc**), the fixed provider identifier (**cid**), and the padding contract exposed to the upper layer (**pad_apply**, **pad_block_size**).
+
+The out_info structure itself (**dvco_cipher_provider_info_t**) is allocated by the caller and filled by the provider. The string fields provider_name, provider_version, and provider_desc are provider-owned read-only pointers, normally backed by static storage, and must remain valid for the lifetime of the provider implementation. The caller must treat these fields as immutable and must not modify or free them.
+
+**cid** is the fixed selector used by the stack to identify and resolve the corresponding cipher provider. It is provider-defined but fixed for that provider implementation, and it must remain consistent with the mapping logic used by the stack.
+
+**cid** is used as a compact fixed identifier to simplify the upper security protocol. By referring to providers through a stable numeric selector, the surrounding DVCO stack can resolve, install, and rotate providers without carrying more verbose algorithm descriptors in the protocol itself. The disadvantage of this choice is that **cid** values must be globally unique within the intended interoperability domain. As a consequence, some coordination among developers is required, since uniqueness of **cid** assignments is a governance constraint that cannot be guaranteed by the ABI alone.
 
 ## Padding metadata
 
@@ -760,7 +765,7 @@ with DVCO\_CP\_ERR\_BAD\_STATE until valid active state exists.
 
 # Full Vtable reference (Cipher Provider Interface)
 
-## Get\_info
+## get\_info
 
 ### Signature
 
@@ -784,7 +789,7 @@ Fully initialize out\_info on success.
 
   - DVCO\_CP\_ERR\_INVALID\_ARG if out\_info == NULL
 
-## Create
+## create
 
 ### Signature
 
@@ -850,11 +855,11 @@ deserialization before use.
 
 On failure, create() must:
 
-  - > return a non-zero error code
+  - return a non-zero error code
 
-  - > leave \*out\_ctx == NULL
+  - leave \*out\_ctx == NULL
 
-  - > free all partially allocated resources before returning
+  - free all partially allocated resources before returning
 
 No partially constructed context may escape on failure.
 
@@ -873,7 +878,7 @@ Typical cases:
 
   - DVCO\_CP\_ERR\_CONFIG
 
-## Destroy
+## destroy
 
 ### Signature
 
@@ -907,7 +912,7 @@ After **destroy(ctx)**, the context is invalid and must not be reused.
 
 After destroy, the caller must consider the handle dead.
 
-## Reset
+## reset
 
 ### Signature
 
@@ -951,7 +956,7 @@ state. That is the role of rotate().
 
   - DVCO\_CP\_ERR\_BAD\_STATE if reset is not valid in the current state
 
-## Rotate
+## rotate
 
 \[rotate\]
 
@@ -1026,7 +1031,7 @@ Typical cases:
 
   - DVCO\_CP\_ERR\_CRYPTO
 
-## Serialize\_shareable
+## serialize\_shareable
 
 ### Signature
 
@@ -1087,7 +1092,7 @@ Typical cases:
 
   - DVCO\_CP\_ERR\_BUFFER\_TOO\_SMALL
 
-## Deserialize\_shareable
+## deserialize\_shareable
 
 ### Signature
 
@@ -1147,7 +1152,7 @@ Typical cases:
 
   - DVCO\_CP\_ERR\_BAD\_STATE
 
-## Compare shareable
+## compare\_shareable
 
 ### Signature
 
@@ -1200,7 +1205,7 @@ document that clearly and keep it consistent.
 If no current comparable state is installed, return
 DVCO\_CP\_ERR\_BAD\_STATE.
 
-## Serialize\_private
+## serialize\_private
 
 ### Signature
 
@@ -1238,7 +1243,7 @@ The private blob may:
 
 This is provider-defined.
 
-## Deserialize\_private
+## deserialize\_private
 
 ### Signature
 
@@ -1277,7 +1282,7 @@ Typical cases:
 
   - DVCO\_CP\_ERR\_NOT\_SUPPORTED
 
-## Compare private
+## compare\_private
 
 ### Signature
 
@@ -1304,7 +1309,7 @@ Optional in v1, consistent with private serialization support.
 Equivalent in spirit to compare\_shareable(), but against the
 private-state format.
 
-## Encrypt
+## encrypt
 
 ### Signature
 
@@ -1406,7 +1411,7 @@ Typical cases:
 
   - DVCO\_CP\_ERR\_CRYPTO
 
-## Decrypt
+## decrypt
 
 ### Signature
 
@@ -1496,7 +1501,7 @@ Use PARSE when the ciphertext framing itself is malformed.
 Use CRYPTO when cryptographic verification or decryption fails after
 successful parsing.
 
-## Last\_error
+## last\_error
 
 ### Signature
 

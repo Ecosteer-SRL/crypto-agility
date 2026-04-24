@@ -3,7 +3,11 @@
 # date:  30/03/2026
 #
 # Makefile for cipher providers and runtime-loading test infrastructure.
-# Location:
+#	usage:
+#	make clean
+#	make debug (use this with the scripts in src/tools)
+#	make release
+#	make callgrind
 
 #   ~/crypto-agility/c
 CC ?= g++
