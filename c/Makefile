@@ -1,6 +1,6 @@
 # auth:  graz
-# ver:   1.4
-# date:  30/03/2026
+# ver:   1.5
+# date:  05/05/2026
 #
 # Makefile for cipher providers and runtime-loading test infrastructure.
 #	usage:
@@ -34,12 +34,13 @@ CFLAGS_CFG := $(CFLAGS_$(CFG))
 
 LDLIBS_AES_CBC_SO               := -lcrypto
 LDLIBS_AES_CTR_SO               := -lcrypto
+LDLIBS_AES_GCM_SO               := -lcrypto
 LDLIBS_CHACHA20_POLY1305_SO     := -lcrypto
 LDLIBS_BLOWFISH_ECB_SO          := -lcrypto
 LDLIBS_RL_TEST                  := -ldl
 
 APPS := test_cipher_provider
-LIBS := libaes_cbc_provider.so libaes_ctr_provider.so libchacha20_poly1305_provider.so libblowfish_ecb_provider.so
+LIBS := libaes_cbc_provider.so libaes_ctr_provider.so libaes_gcm_provider.so libchacha20_poly1305_provider.so libblowfish_ecb_provider.so
 
 OBJS_test_cipher_provider := \
 	$(OBJDIR)/test_cipher_provider.o \
@@ -52,6 +53,9 @@ OBJS_libaes_cbc_provider := \
 OBJS_libaes_ctr_provider := \
 	$(OBJDIR)/aes_ctr_provider.o
 
+OBJS_libaes_gcm_provider := \
+	$(OBJDIR)/aes_gcm_provider.o
+
 OBJS_libchacha20_poly1305_provider := \
 	$(OBJDIR)/chacha20_poly1305_provider.o
 
@@ -62,6 +66,7 @@ ALL_OBJS := \
 	$(OBJS_test_cipher_provider) \
 	$(OBJS_libaes_cbc_provider) \
 	$(OBJS_libaes_ctr_provider) \
+	$(OBJS_libaes_gcm_provider) \
 	$(OBJS_libchacha20_poly1305_provider) \
 	$(OBJS_libblowfish_ecb_provider)
 
@@ -71,6 +76,7 @@ BIN_test_cipher_provider := $(BINDIR)/test_cipher_provider
 
 SO_libaes_cbc_provider := $(LIBDIR)/libaes_cbc_provider.so
 SO_libaes_ctr_provider := $(LIBDIR)/libaes_ctr_provider.so
+SO_libaes_gcm_provider := $(LIBDIR)/libaes_gcm_provider.so
 SO_libchacha20_poly1305_provider := $(LIBDIR)/libchacha20_poly1305_provider.so
 SO_libblowfish_ecb_provider := $(LIBDIR)/libblowfish_ecb_provider.so
 
@@ -80,6 +86,7 @@ ALL_BINS := \
 ALL_LIBS := \
 	$(SO_libaes_cbc_provider) \
 	$(SO_libaes_ctr_provider) \
+	$(SO_libaes_gcm_provider) \
 	$(SO_libchacha20_poly1305_provider) \
 	$(SO_libblowfish_ecb_provider)
 
@@ -101,7 +108,7 @@ callgrind:
 $(OBJDIR)/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
-	
+
 $(OBJDIR)/%.o: $(TOOLS_SRC_DIR)/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
@@ -115,6 +122,10 @@ $(OBJDIR)/aes_cbc_provider.o: $(COMMON_SRC_DIR)/aes_cbc_provider.c $(COMMON_INC_
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
 
 $(OBJDIR)/aes_ctr_provider.o: $(COMMON_SRC_DIR)/aes_ctr_provider.c $(COMMON_INC_CIPHERS_DIR)/cipher_provider.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
+
+$(OBJDIR)/aes_gcm_provider.o: $(COMMON_SRC_DIR)/aes_gcm_provider.c $(COMMON_INC_CIPHERS_DIR)/cipher_provider.h
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
 
@@ -138,6 +149,10 @@ $(SO_libaes_ctr_provider): $(OBJS_libaes_ctr_provider)
 	@mkdir -p $(@D)
 	$(CC) -shared -o $@ $^ $(LDLIBS_AES_CTR_SO)
 
+$(SO_libaes_gcm_provider): $(OBJS_libaes_gcm_provider)
+	@mkdir -p $(@D)
+	$(CC) -shared -o $@ $^ $(LDLIBS_AES_GCM_SO)
+
 $(SO_libchacha20_poly1305_provider): $(OBJS_libchacha20_poly1305_provider)
 	@mkdir -p $(@D)
 	$(CC) -shared -o $@ $^ $(LDLIBS_CHACHA20_POLY1305_SO)
@@ -145,7 +160,6 @@ $(SO_libchacha20_poly1305_provider): $(OBJS_libchacha20_poly1305_provider)
 $(SO_libblowfish_ecb_provider): $(OBJS_libblowfish_ecb_provider)
 	@mkdir -p $(@D)
 	$(CC) -shared -o $@ $^ $(LDLIBS_BLOWFISH_ECB_SO)
-
 
 $(BIN_test_cipher_provider): $(OBJS_test_cipher_provider)
 	@mkdir -p $(@D)
