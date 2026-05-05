@@ -1,0 +1,12 @@
+
+preliminary set of cids
+
+cipher			cid
+-------------------------------------
+BLOWFISH-ECB        	1u
+AES-CBC             	2u
+AES-CTR             	3u
+CHACHA20-POLY1305   	4u
+AES-GCM             	5u
+
+
