@@ -1111,6 +1111,17 @@ size\_t in\_len
 
 Install provider state from a shareable blob.
 
+#### Important note: shareable blob as decrypt-state source of truth
+
+Note: `deserialize_shareable()` is the subscriber-side source of truth for the active decrypt state. The subscriber provider may be instantiated with a local configuration string, but once a shareable blob is deserialized, the provider must install the effective cryptographic state carried by that blob, replacing any previously active decrypt state created by `create()`, `reset()`, `rotate()`, or a previous deserialization.
+
+The shareable blob does not need to contain the original publisher configuration string. Its purpose is different: it must carry the effective provider state required by the subscriber to decrypt payloads produced with the corresponding active key.
+
+For example, an AES-family provider may serialize the active key as `[key_len_be:2][key]`. In that case, the subscriber does not need the publisher's original `keybits` option. It derives the effective AES key size directly from `key_len`: 16 bytes means AES-128, 24 bytes means AES-192, and 32 bytes means AES-256. This remains true even if the subscriber provider was created with a different local `keybits` preference.
+
+Publisher and subscriber configurations therefore do not need to match in local generation preferences such as `keybits` or fixed initial `key`. What must match is the provider identity and format contract: the same `cid`, compatible provider implementation, compatible ABI, compatible shareable serialization format, and compatible ciphertext framing.
+
+
 ### When it is called
 
 Typically on the subscriber side after receiving or looking up the
