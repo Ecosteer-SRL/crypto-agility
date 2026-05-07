@@ -10,4 +10,6 @@ CHACHA20-POLY1305   	4u
 AES-GCM             	5u
 ASCON                   6u
 AES-CCM                 7u
+AES-XTS                 8u
+
 
