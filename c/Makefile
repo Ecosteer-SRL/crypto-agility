@@ -1,6 +1,6 @@
 # auth:  graz
-# ver:   1.5
-# date:  05/05/2026
+# ver:   1.6
+# date:  06/05/2026
 #
 # Makefile for cipher providers and runtime-loading test infrastructure.
 #	usage:
@@ -18,13 +18,14 @@ PADDING_SRC_DIR := ./src/padding
 TOOLS_SRC_DIR := ./src/tools
 COMMON_INC_DIR := ./include
 COMMON_INC_CIPHERS_DIR := ./include/ciphers
+ASCON_AEAD128_SRC_DIR := $(COMMON_SRC_DIR)/externals/ascon/asconaead128_ref
 
 BUILD_ROOT := build
 OBJDIR := $(BUILD_ROOT)/$(CFG)/obj
 BINDIR := $(BUILD_ROOT)/$(CFG)/bin
 LIBDIR := $(BUILD_ROOT)/$(CFG)/lib
 
-IFLAGS := -I$(COMMON_INC_DIR) -I$(COMMON_INC_CIPHERS_DIR) -I. -I..
+IFLAGS := -I$(COMMON_INC_DIR) -I$(COMMON_INC_CIPHERS_DIR) -I$(ASCON_AEAD128_SRC_DIR) -I. -I..
 CFLAGS_COMMON := -Wall -fPIC -MMD -MP $(IFLAGS)
 
 CFLAGS_debug     := -O0 -g3 -DDEBUG
@@ -35,12 +36,13 @@ CFLAGS_CFG := $(CFLAGS_$(CFG))
 LDLIBS_AES_CBC_SO               := -lcrypto
 LDLIBS_AES_CTR_SO               := -lcrypto
 LDLIBS_AES_GCM_SO               := -lcrypto
+LDLIBS_ASCON_AEAD128_SO         := -lcrypto
 LDLIBS_CHACHA20_POLY1305_SO     := -lcrypto
 LDLIBS_BLOWFISH_ECB_SO          := -lcrypto
 LDLIBS_RL_TEST                  := -ldl
 
 APPS := test_cipher_provider
-LIBS := libaes_cbc_provider.so libaes_ctr_provider.so libaes_gcm_provider.so libchacha20_poly1305_provider.so libblowfish_ecb_provider.so
+LIBS := libaes_cbc_provider.so libaes_ctr_provider.so libaes_gcm_provider.so libascon_aead128_provider.so libchacha20_poly1305_provider.so libblowfish_ecb_provider.so
 
 OBJS_test_cipher_provider := \
 	$(OBJDIR)/test_cipher_provider.o \
@@ -56,6 +58,11 @@ OBJS_libaes_ctr_provider := \
 OBJS_libaes_gcm_provider := \
 	$(OBJDIR)/aes_gcm_provider.o
 
+OBJS_libascon_aead128_provider := \
+	$(OBJDIR)/ascon_aead128_provider.o \
+	$(OBJDIR)/ascon_aead128_aead.o \
+	$(OBJDIR)/ascon_aead128_printstate.o
+
 OBJS_libchacha20_poly1305_provider := \
 	$(OBJDIR)/chacha20_poly1305_provider.o
 
@@ -67,6 +74,7 @@ ALL_OBJS := \
 	$(OBJS_libaes_cbc_provider) \
 	$(OBJS_libaes_ctr_provider) \
 	$(OBJS_libaes_gcm_provider) \
+	$(OBJS_libascon_aead128_provider) \
 	$(OBJS_libchacha20_poly1305_provider) \
 	$(OBJS_libblowfish_ecb_provider)
 
@@ -77,6 +85,7 @@ BIN_test_cipher_provider := $(BINDIR)/test_cipher_provider
 SO_libaes_cbc_provider := $(LIBDIR)/libaes_cbc_provider.so
 SO_libaes_ctr_provider := $(LIBDIR)/libaes_ctr_provider.so
 SO_libaes_gcm_provider := $(LIBDIR)/libaes_gcm_provider.so
+SO_libascon_aead128_provider := $(LIBDIR)/libascon_aead128_provider.so
 SO_libchacha20_poly1305_provider := $(LIBDIR)/libchacha20_poly1305_provider.so
 SO_libblowfish_ecb_provider := $(LIBDIR)/libblowfish_ecb_provider.so
 
@@ -87,6 +96,7 @@ ALL_LIBS := \
 	$(SO_libaes_cbc_provider) \
 	$(SO_libaes_ctr_provider) \
 	$(SO_libaes_gcm_provider) \
+	$(SO_libascon_aead128_provider) \
 	$(SO_libchacha20_poly1305_provider) \
 	$(SO_libblowfish_ecb_provider)
 
@@ -129,6 +139,18 @@ $(OBJDIR)/aes_gcm_provider.o: $(COMMON_SRC_DIR)/aes_gcm_provider.c $(COMMON_INC_
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
 
+$(OBJDIR)/ascon_aead128_provider.o: $(COMMON_SRC_DIR)/ascon_aead128_provider.c $(COMMON_INC_CIPHERS_DIR)/cipher_provider.h $(ASCON_AEAD128_SRC_DIR)/crypto_aead.h $(ASCON_AEAD128_SRC_DIR)/api.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
+
+$(OBJDIR)/ascon_aead128_aead.o: $(ASCON_AEAD128_SRC_DIR)/aead.c $(ASCON_AEAD128_SRC_DIR)/api.h $(ASCON_AEAD128_SRC_DIR)/ascon.h $(ASCON_AEAD128_SRC_DIR)/crypto_aead.h $(ASCON_AEAD128_SRC_DIR)/permutations.h $(ASCON_AEAD128_SRC_DIR)/printstate.h $(ASCON_AEAD128_SRC_DIR)/word.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
+
+$(OBJDIR)/ascon_aead128_printstate.o: $(ASCON_AEAD128_SRC_DIR)/printstate.c $(ASCON_AEAD128_SRC_DIR)/printstate.h $(ASCON_AEAD128_SRC_DIR)/ascon.h $(ASCON_AEAD128_SRC_DIR)/word.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
+
 $(OBJDIR)/chacha20_poly1305_provider.o: $(COMMON_SRC_DIR)/chacha20_poly1305_provider.c $(COMMON_INC_CIPHERS_DIR)/cipher_provider.h
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
@@ -152,6 +174,10 @@ $(SO_libaes_ctr_provider): $(OBJS_libaes_ctr_provider)
 $(SO_libaes_gcm_provider): $(OBJS_libaes_gcm_provider)
 	@mkdir -p $(@D)
 	$(CC) -shared -o $@ $^ $(LDLIBS_AES_GCM_SO)
+
+$(SO_libascon_aead128_provider): $(OBJS_libascon_aead128_provider)
+	@mkdir -p $(@D)
+	$(CC) -shared -o $@ $^ $(LDLIBS_ASCON_AEAD128_SO)
 
 $(SO_libchacha20_poly1305_provider): $(OBJS_libchacha20_poly1305_provider)
 	@mkdir -p $(@D)
