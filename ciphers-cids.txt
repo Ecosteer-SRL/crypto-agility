@@ -8,5 +8,6 @@ AES-CBC             	2u
 AES-CTR             	3u
 CHACHA20-POLY1305   	4u
 AES-GCM             	5u
-
+ASCON                   6u
+AES-CCM                 7u
 
