@@ -498,7 +498,153 @@ done:
     return rc;
 }
 
+#define NEW_REL
+#ifdef NEW_REL
+static int aes_decrypt(
+    dvco_cipher_ctx_t *ctx,
+    const uint8_t *in_data,
+    size_t in_len,
+    const uint8_t *aad,
+    size_t aad_len,
+    dvco_buf_t *out
+) {
+    aes_cipher_ctx_t *a = aes_ctx_from_opaque(ctx);
+    const EVP_CIPHER *cipher;
+    EVP_CIPHER_CTX *evp = NULL;
+    uint8_t iv_len;
+    const uint8_t *iv;
+    const uint8_t *ct;
+    size_t ct_len;
+    size_t needed;
+    uint8_t *tmp = NULL;
+    size_t actual_len;
+    int outl1 = 0;
+    int outl2 = 0;
+    int rc = DVCO_CP_ERR_CRYPTO;
 
+    if (a == NULL || out == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (!a->is_active) {
+        aes_set_error(a, "provider is not active; rotate or deserialize_shareable first");
+        return DVCO_CP_ERR_BAD_STATE;
+    }
+
+    if (in_data == NULL) {
+        aes_set_error(a, "decrypt input is NULL");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (aad != NULL || aad_len != 0u) {
+        aes_set_error(a, "AAD not supported by AES-CBC provider");
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    cipher = aes_select_evp_cipher(a);
+    if (cipher == NULL) {
+        aes_set_error(a, "invalid AES state");
+        return DVCO_CP_ERR_BAD_STATE;
+    }
+
+    if (in_len < (1u + DVCO_AES_IV_LEN_CBC)) {
+        aes_set_error(a, "ciphertext too short");
+        return DVCO_CP_ERR_PARSE;
+    }
+
+    iv_len = in_data[0];
+    if (iv_len != DVCO_AES_IV_LEN_CBC) {
+        aes_set_error(a, "invalid IV length");
+        return DVCO_CP_ERR_PARSE;
+    }
+
+    iv = &in_data[1];
+    ct = &in_data[1u + (size_t)iv_len];
+    ct_len = in_len - (1u + (size_t)iv_len);
+
+    if (ct_len == 0u) {
+        aes_set_error(a, "missing ciphertext");
+        return DVCO_CP_ERR_PARSE;
+    }
+
+    if ((ct_len % DVCO_AES_BLOCK_SIZE) != 0u) {
+        aes_set_error(a, "AES-CBC ciphertext length is not block-aligned");
+        return DVCO_CP_ERR_PARSE;
+    }
+
+    // In sizing mode we cannot know the exact unpadded plaintext length
+    // without decrypting. Return the safe upper bound.
+    needed = ct_len;
+
+    if (out->data == NULL) {
+        out->len = needed;
+        return DVCO_CP_OK;
+    }
+
+    tmp = (uint8_t *)malloc(ct_len);
+    if (tmp == NULL) {
+        aes_set_error(a, "temporary decrypt buffer allocation failed");
+        return DVCO_CP_ERR_ALLOC;
+    }
+
+    evp = EVP_CIPHER_CTX_new();
+    if (evp == NULL) {
+        aes_set_error(a, "EVP_CIPHER_CTX_new failed");
+        rc = DVCO_CP_ERR_ALLOC;
+        goto done;
+    }
+
+    if (EVP_DecryptInit_ex(evp, cipher, NULL, a->key, iv) != 1) {
+        aes_set_error(a, "EVP_DecryptInit_ex failed");
+        goto done;
+    }
+
+    if (EVP_DecryptUpdate(
+            evp,
+            tmp,
+            &outl1,
+            ct,
+            (int)ct_len) != 1) {
+        aes_set_error(a, "EVP_DecryptUpdate failed");
+        goto done;
+    }
+
+    if (EVP_DecryptFinal_ex(
+            evp,
+            &tmp[(size_t)outl1],
+            &outl2) != 1) {
+        aes_set_error(a, "EVP_DecryptFinal_ex failed");
+        goto done;
+    }
+
+    actual_len = (size_t)outl1 + (size_t)outl2;
+
+    if (out->cap < actual_len) {
+        out->len = actual_len;
+        rc = DVCO_CP_ERR_BUFFER_TOO_SMALL;
+        goto done;
+    }
+
+    if (actual_len > 0u) {
+        memcpy(out->data, tmp, actual_len);
+    }
+
+    out->len = actual_len;
+    rc = DVCO_CP_OK;
+
+done:
+    if (evp != NULL) {
+        EVP_CIPHER_CTX_free(evp);
+    }
+
+    if (tmp != NULL) {
+        aes_secure_zero(tmp, ct_len);
+        free(tmp);
+    }
+
+    return rc;
+}
+#else
 static int aes_decrypt(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
@@ -614,6 +760,7 @@ done:
     }
     return rc;
 }
+#endif
 
 
 static const char *aes_last_error(dvco_cipher_ctx_t *ctx) {
