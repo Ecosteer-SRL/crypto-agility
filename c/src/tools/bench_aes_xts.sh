@@ -10,7 +10,8 @@ ${PROGFOLDER}/bench_cipher_provider \
 --cipher ${CIPHERFOLDER}/libaes_xts_provider.so \
 --confstring "" \
 --size ${SIZE} \
---iters ${ITERS}
+--iters ${ITERS} \
+--decrypt-mode cycle
 
 # AES-XTS requires payloads compatible with the provider constraints.
 # Use SIZE >= 16.

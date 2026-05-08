@@ -10,7 +10,8 @@ ${PROGFOLDER}/bench_cipher_provider \
 --cipher ${CIPHERFOLDER}/libascon_aead128_provider.so \
 --confstring "" \
 --size ${SIZE} \
---iters ${ITERS}
+--iters ${ITERS} \
+--decrypt-mode cycle
 
 # override defaults, for example:
 # SIZE=4096 ITERS=50000 ./bench_ascon_aead128.sh

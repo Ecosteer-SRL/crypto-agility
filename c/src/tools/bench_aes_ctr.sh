@@ -10,7 +10,8 @@ ${PROGFOLDER}/bench_cipher_provider \
 --cipher ${CIPHERFOLDER}/libaes_ctr_provider.so \
 --confstring "keybits=256" \
 --size ${SIZE} \
---iters ${ITERS}
+--iters ${ITERS} \
+--decrypt-mode cycle
 
 # keybits: use 128, 192 or 256
 # override defaults, for example:

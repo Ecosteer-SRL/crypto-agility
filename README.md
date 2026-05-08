@@ -1722,6 +1722,29 @@ decrypt() must accept exactly what encrypt() emits.
 
 This includes all provider-specific framing choices.
 
+## Context reuse invariant
+
+encrypt() and decrypt() must not consume the provider material installed
+in the context.
+
+A context initialized through create(), rotate(), deserialize_shareable(),
+or deserialize_private() must remain valid and reusable after each
+encrypt() or decrypt() call.
+
+The caller must not be required to call deserialize_shareable(),
+deserialize_private(), rotate(), or any other material-installation
+function again after each encrypt() or decrypt() operation.
+
+If the underlying cipher implementation needs temporary state changes,
+counter updates, IV reconstruction, nonce handling, tweak handling,
+padding state, or any other per-operation mutation, that logic must be
+encapsulated inside the provider implementation.
+
+In particular, encrypt() and decrypt() may update internal temporary
+state while executing, but before returning they must either restore the
+externally visible context state or leave the context in a valid reusable
+state for subsequent operations.
+
 ## Outer layer assumptions
 
 The outer layer assumes only that:

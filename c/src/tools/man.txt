@@ -1,0 +1,177 @@
+====================================================
+test_cipher_provider
+====================================================
+
+Purpose:
+test_cipher_provider is a standalone compliance test tool for cipher providers
+compliant with the crypto-agility framework.
+Its objective is to verify whether a cipher-provider implementation exposes and
+exercises the complete mandatory vtable defined by the cipher-provider framework.
+To do this, the program loads a provider shared library at runtime, resolves the
+provider API, obtains the vtable, and checks that all required functions are
+available and callable.
+It then exercises the provider lifecycle through the vtable to confirm that the
+implementation behaves consistently with the framework contract.
+
+Compliance Logic:
+The program checks compliance by loading the provider dynamically and verifying that
+the provider exposes the expected ABI entry point and mandatory vtable functions.
+The main sequence is:
+ 1) Parse command-line arguments and confstring.
+ 2) Load the provider .so with dlopen().
+ 3) Resolve dvco_cipher_provider_get_api with dlsym().
+ 4) Call dvco_cipher_provider_get_api() to obtain the provider vtable.
+ 5) Check that all mandatory vtable functions are present:
+    get_info, create, destroy, reset, rotate,
+    serialize_shareable, deserialize_shareable,
+    serialize_private, deserialize_private,
+    compare_shareable, compare_private,
+    encrypt, decrypt, last_error.
+ 6) Call get_info() and print provider metadata.
+ 7) Call create() twice:
+    ctx_a = encrypting/origin context
+    ctx_b = decrypting/recipient context
+ 8) Call reset(ctx_a).
+ 9) Call rotate(ctx_a) to generate active key material.
+10) Prepare the plaintext, applying caller-side padding if the provider metadata requires it.
+11) Call encrypt(ctx_a).
+12) Call serialize_shareable(ctx_a).
+13) Call deserialize_shareable(ctx_b).
+14) Call compare_shareable() on both ctx_b and ctx_a.
+15) Call serialize_private(ctx_a).
+16) Create ctx_c, call deserialize_private(ctx_c), and call compare_private() on ctx_c and ctx_a.
+17) Call decrypt(ctx_b).
+18) Remove padding if required.
+19) Compare decrypted plaintext with the original plaintext.
+20) Destroy all contexts and close the provider library.
+
+Command:
+./test_cipher_provider \
+  --lib <provider_shared_library> \
+  [--confstring "<provider_configuration>"] \
+  [--plain "<plaintext>"]
+
+Arguments:
+--lib <path>
+  Path to the runtime-loadable cipher-provider shared library to be tested.
+--confstring "<string>"
+  Optional provider-specific configuration string.
+  The string is parsed by the tool and passed to the provider create() function.
+  If omitted, an empty configuration string is used.
+--plain "<text>"
+  Optional plaintext used for the encrypt/decrypt roundtrip test.
+  If omitted, the default plaintext is "hello dvco".
+--help
+-h
+  Print usage information.
+
+
+Example:
+ ../../build/debug/bin/test_cipher_provider \
+ --lib ../../build/debug/lib/libaes_gcm_provider.so \
+ --confstring "" \
+ --plain "hello dvco"
+
+
+====================================================
+bench_cipher_provider
+====================================================
+Purpose:
+bench_cipher_provider is a standalone benchmark tool for cipher providers.
+It measures the throughput of a cipher-provider implementation when exercised
+through the cipher-provider framework ABI.
+The program loads a provider shared library at runtime, resolves the provider API,
+obtains the vtable, prepares deterministic input data, verifies a successful
+encrypt/decrypt roundtrip, and then measures encryption throughput and decrypt throughput.
+The tool is provider-neutral: it does not benchmark a raw cryptographic primitive directly,
+but the provider execution path through the framework vtable ABI.
+
+Benchmark Logic:
+The program benchmarks a provider by first executing a correctness setup phase and then
+running two benchmark phases.
+The main sequence is:
+ 1) Parse command-line arguments and confstring.
+ 2) Allocate a deterministic plaintext buffer of the requested size.
+ 3) Fill the plaintext buffer using:
+    plaintext[i] = (uint8_t)(i & 0xff)
+ 4) Load the provider .so with dlopen().
+ 5) Resolve dvco_cipher_provider_get_api with dlsym().
+ 6) Call dvco_cipher_provider_get_api() to obtain the provider vtable.
+ 7) Check that the required benchmark vtable functions are present:
+    get_info, create, destroy, rotate,
+    serialize_shareable, deserialize_shareable,
+    encrypt, decrypt.
+ 8) Call get_info() and read provider metadata.
+ 9) Call create() twice:
+    ctx_enc = encryption/origin context
+    ctx_dec_check = correctness-check decrypt context
+10) If available, call reset(ctx_enc).
+11) Call rotate(ctx_enc) to generate active key material.
+12) Call serialize_shareable(ctx_enc).
+13) Call deserialize_shareable(ctx_dec_check).
+14) Prepare the encryption input, applying caller-side padding if the provider metadata requires it.
+15) Call encrypt(ctx_enc) once to generate a reference ciphertext.
+16) Call decrypt(ctx_dec_check) once to verify the reference ciphertext.
+17) Remove padding if required, based on the pad_apply property returned by get_info().
+18) Compare decrypted plaintext with the original deterministic plaintext.
+19) Abort the benchmark if the correctness roundtrip fails.
+20) Run the encryption benchmark:
+    repeat N times:
+      encrypt the prepared input using the initialized ctx_enc
+21) Run the decrypt benchmark according to --decrypt-mode:
+    reuse:
+      create a decrypt context once
+      deserialize_shareable into the decrypt context once
+      repeat N times:
+        decrypt the immutable reference ciphertext
+      destroy the decrypt context
+    cycle:
+      repeat N times:
+        create a fresh decrypt context
+        deserialize_shareable into the decrypt context
+        decrypt the immutable reference ciphertext
+        destroy the decrypt context
+22) Print provider metadata, payload sizes, selected decrypt mode, timings, operations per
+    second, and MiB/s results.
+23) Destroy contexts, close the provider library, and release allocated buffers.
+
+Command:
+./bench_cipher_provider \
+  --cipher <provider_shared_library> \
+  [--confstring "<provider_configuration>"] \
+  [--size <bytes>] \
+  [--iters <n>] \
+  [--decrypt-mode <reuse|cycle>]
+
+Arguments:
+--cipher <path>
+  Path to the runtime-loadable cipher-provider shared library to be benchmarked.
+--lib <path>
+  Alias for --cipher.
+--confstring "<string>"
+  Optional provider-specific configuration string.
+  The string is parsed by the tool and passed to the provider create() function.
+  If omitted, an empty configuration string is used.
+--size <bytes>
+  Optional cleartext payload size in bytes.
+  If omitted, the default size is 1024 bytes.
+--iters <n>
+  Optional number of benchmark iterations.
+  If omitted, the default number of iterations is 100000.
+--decrypt-mode <reuse|cycle>
+  Optional decrypt benchmark mode.
+  reuse creates one decrypt context, imports shareable material once, and repeats decrypt N times.
+  cycle creates a fresh decrypt context, imports shareable material, decrypts once, and
+  destroys the context for each iteration.
+  If omitted, reuse is used.  
+--help
+-h
+  Print usage information.
+
+Example:
+../../build/release/bin/bench_cipher_provider \
+  --cipher ../../build/release/lib/libaes_gcm_provider.so \
+  --confstring "" \
+  --size 1024 \
+  --iters 100000 \
+  --decrypt-mode reuse

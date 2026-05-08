@@ -1,34 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.2
+// ver: 1.3
 
 // bench_cipher_provider.c
 //
-// Linux benchmark harness for DVCO cipher providers.
+// Linux benchmark harness for cipher providers.
 //
 // Purpose
 // -------
 // - Load one cipher provider at runtime from a shared library (.so)
 // - Resolve dvco_cipher_provider_get_api()
 // - Exercise the provider through the current cipher_provider.h vtable ABI
-// - Measure provider-neutral encryption and subscriber-side decryption throughput
+// - Measure provider-neutral encryption and decryption throughput
 //
 // Benchmark semantics
 // -------------------
 // - One benchmark tool must work with all cipher providers.
-// - Therefore the tool does not assume that decrypt() can be called repeatedly
-//   on the same provider context with the same ciphertext.
 // - Encryption benchmark:
 //     repeat N times:
 //         encrypt prepared plaintext using one initialized encryption context
-// - Decryption benchmark:
-//     repeat N times:
-//         create decrypt context
-//         deserialize_shareable into decrypt context
-//         decrypt reference ciphertext
+// - Decryption benchmark supports two modes:
+//     reuse:
+//         create decrypt context once
+//         deserialize_shareable into decrypt context once
+//         repeat N times:
+//             decrypt reference ciphertext
 //         destroy decrypt context
-// - The decrypt number is therefore a subscriber-side decrypt cycle time.
+//     cycle:
+//         repeat N times:
+//             create decrypt context
+//             deserialize_shareable into decrypt context
+//             decrypt reference ciphertext
+//             destroy decrypt context
+// - reuse is the default mode and reflects the normal cipher-instance lifecycle.
+// - cycle measures full decrypt-context lifecycle overhead.
 //
 // Notes
 // -----
@@ -60,11 +66,17 @@
 #define BENCH_DEFAULT_SIZE 1024u
 #define BENCH_DEFAULT_ITERS 100000u
 
+typedef enum decrypt_mode_e {
+    DECRYPT_MODE_REUSE = 0,
+    DECRYPT_MODE_CYCLE = 1
+} decrypt_mode_t;
+
 typedef struct app_cfg_s {
     const char *lib_path;
     const char *confstring;
     size_t plain_len;
     size_t iters;
+    decrypt_mode_t decrypt_mode;
 } app_cfg_t;
 
 typedef struct kv_list_s {
@@ -75,31 +87,38 @@ typedef struct kv_list_s {
 
 typedef struct bench_result_s {
     double enc_ms;
-    double dec_cycle_ms;
+    double dec_ms;
     double total_ms;
     double enc_ops_sec;
-    double dec_cycles_sec;
+    double dec_ops_sec;
     double enc_mib_sec;
-    double dec_cycle_mib_sec;
+    double dec_mib_sec;
 } bench_result_t;
 
 static void usage(const char *prog) {
     fprintf(stderr,
         "Usage:\n"
-        "  %s --cipher <provider.so> --size <bytes> --iters <n> [--confstring \"k1=v1;k2=v2\"]\n"
+        "  %s --cipher <provider.so> [--confstring \"k1=v1;k2=v2\"] [--size <bytes>] [--iters <n>] [--decrypt-mode <reuse|cycle>]\n"
         "\n"
         "Aliases:\n"
         "  --lib <provider.so> is accepted as an alias for --cipher\n"
         "\n"
+        "Decrypt modes:\n"
+        "  reuse  create one decrypt context, import shareable material once, decrypt N times\n"
+        "  cycle  create/import/decrypt/destroy once per iteration\n"
+        "\n"
+        "Default decrypt mode:\n"
+        "  reuse\n"
+        "\n"
         "Examples:\n"
-        "  %s --cipher ../../build/release/lib/libaes_gcm_provider.so \\\n"
-        "     --confstring \"\" \\\n"
-        "     --size 1024 \\\n"
-        "     --iters 100000\n",
+        "  %s --cipher ../../build/release/lib/libaes_gcm_provider.so --confstring \"\" --size 1024 --iters 100000 --decrypt-mode reuse\n",
         prog,
         prog
     );
 }
+
+
+
 
 static int parse_size_value(const char *s, size_t *out) {
     char *end = NULL;
@@ -119,6 +138,36 @@ static int parse_size_value(const char *s, size_t *out) {
     return 0;
 }
 
+static const char *decrypt_mode_to_string(decrypt_mode_t mode) {
+    switch (mode) {
+        case DECRYPT_MODE_REUSE:
+            return "reuse";
+        case DECRYPT_MODE_CYCLE:
+            return "cycle";
+        default:
+            return "unknown";
+    }
+}
+
+static int parse_decrypt_mode(const char *s, decrypt_mode_t *out) {
+    if (s == NULL || out == NULL) {
+        return -1;
+    }
+
+    if (strcmp(s, "reuse") == 0) {
+        *out = DECRYPT_MODE_REUSE;
+        return 0;
+    }
+
+    if (strcmp(s, "cycle") == 0) {
+        *out = DECRYPT_MODE_CYCLE;
+        return 0;
+    }
+
+    return -1;
+}
+
+
 static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
     int i;
 
@@ -130,25 +179,37 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
     cfg->confstring = "";
     cfg->plain_len = BENCH_DEFAULT_SIZE;
     cfg->iters = BENCH_DEFAULT_ITERS;
+    cfg->decrypt_mode = DECRYPT_MODE_REUSE;
 
     for (i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "--cipher") == 0 || strcmp(argv[i], "--lib") == 0) && (i + 1) < argc) {
             cfg->lib_path = argv[++i];
+
         } else if (strcmp(argv[i], "--confstring") == 0 && (i + 1) < argc) {
             cfg->confstring = argv[++i];
+
         } else if (strcmp(argv[i], "--size") == 0 && (i + 1) < argc) {
             if (parse_size_value(argv[++i], &cfg->plain_len) != 0) {
                 fprintf(stderr, "Invalid --size value\n");
                 return -1;
             }
+
         } else if (strcmp(argv[i], "--iters") == 0 && (i + 1) < argc) {
             if (parse_size_value(argv[++i], &cfg->iters) != 0) {
                 fprintf(stderr, "Invalid --iters value\n");
                 return -1;
             }
+
+        } else if (strcmp(argv[i], "--decrypt-mode") == 0 && (i + 1) < argc) {
+            if (parse_decrypt_mode(argv[++i], &cfg->decrypt_mode) != 0) {
+                fprintf(stderr, "Invalid --decrypt-mode value\n");
+                return -1;
+            }
+
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 1;
+
         } else {
             fprintf(stderr, "Unknown or incomplete argument: %s\n", argv[i]);
             usage(argv[0]);
@@ -164,6 +225,7 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
 
     return 0;
 }
+
 
 static char *trim_inplace(char *s) {
     char *end;
@@ -635,6 +697,93 @@ static int run_encrypt_bench(
     return DVCO_CP_OK;
 }
 
+static int run_decrypt_reuse_bench(
+    const dvco_cipher_provider_api_t *api,
+    const dvco_kv_t *cfg_items,
+    size_t cfg_count,
+    const uint8_t *shareable,
+    size_t shareable_len,
+    const uint8_t *cipher_data,
+    size_t cipher_len,
+    uint8_t *plain_buf,
+    size_t plain_cap,
+    size_t measured_plain_len,
+    size_t iters,
+    bench_result_t *res
+) {
+    struct timespec t0;
+    struct timespec t1;
+    dvco_cipher_ctx_t *ctx = NULL;
+    dvco_buf_t out;
+    size_t i;
+    int rc;
+    double seconds;
+    double total_bytes;
+
+    if (api == NULL ||
+        api->create == NULL ||
+        api->destroy == NULL ||
+        api->deserialize_shareable == NULL ||
+        api->decrypt == NULL ||
+        shareable == NULL ||
+        cipher_data == NULL ||
+        plain_buf == NULL ||
+        res == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    rc = api->create(cfg_items, cfg_count, &ctx);
+    if (rc != DVCO_CP_OK || ctx == NULL) {
+        if (ctx != NULL) {
+            api->destroy(ctx);
+        }
+        return rc;
+    }
+
+    rc = api->deserialize_shareable(ctx, shareable, shareable_len);
+    if (rc != DVCO_CP_OK) {
+        api->destroy(ctx);
+        return rc;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &t0) != 0) {
+        perror("clock_gettime decrypt start");
+        api->destroy(ctx);
+        return DVCO_CP_ERR_GENERIC;
+    }
+
+    for (i = 0u; i < iters; i++) {
+        out.data = plain_buf;
+        out.len = plain_cap;
+        out.cap = plain_cap;
+
+        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+        if (rc != DVCO_CP_OK) {
+            api->destroy(ctx);
+            return rc;
+        }
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0) {
+        perror("clock_gettime decrypt stop");
+        api->destroy(ctx);
+        return DVCO_CP_ERR_GENERIC;
+    }
+
+    api->destroy(ctx);
+
+    res->dec_ms = elapsed_ms(&t0, &t1);
+    seconds = res->dec_ms / 1000.0;
+    total_bytes = (double)measured_plain_len * (double)iters;
+
+    if (seconds > 0.0) {
+        res->dec_ops_sec = (double)iters / seconds;
+        res->dec_mib_sec = total_bytes / seconds / 1024.0 / 1024.0;
+    }
+
+    return DVCO_CP_OK;
+}
+
 static int run_decrypt_cycle_bench(
     const dvco_cipher_provider_api_t *api,
     const dvco_kv_t *cfg_items,
@@ -709,13 +858,13 @@ static int run_decrypt_cycle_bench(
         return DVCO_CP_ERR_GENERIC;
     }
 
-    res->dec_cycle_ms = elapsed_ms(&t0, &t1);
-    seconds = res->dec_cycle_ms / 1000.0;
+    res->dec_ms = elapsed_ms(&t0, &t1);
+    seconds = res->dec_ms / 1000.0;
     total_bytes = (double)measured_plain_len * (double)iters;
 
     if (seconds > 0.0) {
-        res->dec_cycles_sec = (double)iters / seconds;
-        res->dec_cycle_mib_sec = total_bytes / seconds / 1024.0 / 1024.0;
+        res->dec_ops_sec = (double)iters / seconds;
+        res->dec_mib_sec = total_bytes / seconds / 1024.0 / 1024.0;
     }
 
     return DVCO_CP_OK;
@@ -738,16 +887,29 @@ static void print_results(
     printf("encrypt input size    : %zu bytes\n", encrypt_input_len);
     printf("ciphertext size       : %zu bytes\n", ciphertext_len);
     printf("iterations            : %zu\n", cfg->iters);
+    printf("decrypt mode          : %s\n", decrypt_mode_to_string(cfg->decrypt_mode));
     printf("\n");
     printf("encrypt time          : %.3f ms\n", res->enc_ms);
-    printf("decrypt cycle time    : %.3f ms\n", res->dec_cycle_ms);
+    if (cfg->decrypt_mode == DECRYPT_MODE_CYCLE) {
+        printf("decrypt cycle time    : %.3f ms\n", res->dec_ms);
+    } else {
+        printf("decrypt time          : %.3f ms\n", res->dec_ms);
+    }
     printf("total time            : %.3f ms\n", res->total_ms);
     printf("\n");
     printf("encrypt ops/s         : %.2f\n", res->enc_ops_sec);
-    printf("decrypt cycles/s      : %.2f\n", res->dec_cycles_sec);
+    if (cfg->decrypt_mode == DECRYPT_MODE_CYCLE) {
+        printf("decrypt cycles/s      : %.2f\n", res->dec_ops_sec);
+    } else {
+        printf("decrypt ops/s         : %.2f\n", res->dec_ops_sec);
+    }
     printf("\n");
     printf("encrypt MiB/s         : %.2f\n", res->enc_mib_sec);
-    printf("decrypt cycle MiB/s   : %.2f\n", res->dec_cycle_mib_sec);
+    if (cfg->decrypt_mode == DECRYPT_MODE_CYCLE) {
+        printf("decrypt cycle MiB/s   : %.2f\n", res->dec_mib_sec);
+    } else {
+        printf("decrypt MiB/s         : %.2f\n", res->dec_mib_sec);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -936,26 +1098,43 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    rc = run_decrypt_cycle_bench(
-        api,
-        kv.items,
-        kv.count,
-        shareable,
-        shareable_len,
-        ciphertext_ref,
-        ciphertext_ref_len,
-        bench_decrypt_buf,
-        bench_decrypt_cap,
-        encrypt_input_len,
-        cfg.iters,
-        &res
-    );
+    if (cfg.decrypt_mode == DECRYPT_MODE_CYCLE) {
+        rc = run_decrypt_cycle_bench(
+            api,
+            kv.items,
+            kv.count,
+            shareable,
+            shareable_len,
+            ciphertext_ref,
+            ciphertext_ref_len,
+            bench_decrypt_buf,
+            bench_decrypt_cap,
+            encrypt_input_len,
+            cfg.iters,
+            &res
+        );
+    } else {
+        rc = run_decrypt_reuse_bench(
+            api,
+            kv.items,
+            kv.count,
+            shareable,
+            shareable_len,
+            ciphertext_ref,
+            ciphertext_ref_len,
+            bench_decrypt_buf,
+            bench_decrypt_cap,
+            encrypt_input_len,
+            cfg.iters,
+            &res
+        );
+    }
     if (rc != DVCO_CP_OK) {
-        print_provider_op_error("decrypt cycle benchmark", rc, api, NULL);
+        print_provider_op_error("decrypt benchmark", rc, api, NULL);
         goto done;
     }
 
-    res.total_ms = res.enc_ms + res.dec_cycle_ms;
+    res.total_ms = res.enc_ms + res.dec_ms;
     print_results(&cfg, &info, encrypt_input_len, ciphertext_ref_len, &res);
 
     exit_code = 0;

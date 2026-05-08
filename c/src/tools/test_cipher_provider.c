@@ -12,9 +12,10 @@
  * -------
  * - Load a cipher provider at runtime from a shared library (.so)
  * - Resolve dvco_cipher_provider_get_api()
- * - Exercise the provider vtable end-to-end with the rotation flow:
+ * - Exercise the complete mandatory provider vtable end-to-end with the rotation flow:
  *     get_info
  *     create(confstring)
+ *     reset()
  *     rotate()
  *     encrypt
  *     serialize_shareable
@@ -26,6 +27,10 @@
  *     decrypt
  *     last_error
  *     destroy
+ *
+ * Notes:
+ * - All vtable functions are treated as mandatory by this compliance tool.
+ * - A provider that omits any vtable function is considered non-compliant.
  *
  * Generic config model
  * --------------------
@@ -636,12 +641,18 @@ int main(int argc, char **argv) {
     if (api->get_info == NULL ||
         api->create == NULL ||
         api->destroy == NULL ||
+        api->reset == NULL ||
         api->rotate == NULL ||
         api->serialize_shareable == NULL ||
         api->deserialize_shareable == NULL ||
+        api->serialize_private == NULL ||
+        api->deserialize_private == NULL ||
+        api->compare_shareable == NULL ||
+        api->compare_private == NULL ||
         api->encrypt == NULL ||
-        api->decrypt == NULL) {
-        fprintf(stderr, "Provider API is incomplete\n");
+        api->decrypt == NULL ||
+        api->last_error == NULL) {
+        fprintf(stderr, "Provider API is incomplete: all vtable functions are mandatory\n");
         goto done;
     }
 
@@ -674,13 +685,11 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    if (api->reset != NULL) {
-        rc = api->reset(ctx_a);
-        print_rc("reset(ctx_a)", rc);
-        if (rc != DVCO_CP_OK) {
-            print_provider_last_error(api, ctx_a);
-            goto done;
-        }
+    rc = api->reset(ctx_a);
+    print_rc("reset(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
     }
 
     rc = api->rotate(ctx_a);
@@ -723,67 +732,58 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    if (api->compare_shareable != NULL) {
-        rc = api->compare_shareable(ctx_b, shareable, shareable_len);
-        print_cmp_rc("compare_shareable(ctx_b, shareable)", rc);
-        if (rc != DVCO_CP_OK) {
-            fprintf(stderr, "compare_shareable failed after deserialize_shareable\n");
-            print_provider_last_error(api, ctx_b);
-            goto done;
-        }
-
-        rc = api->compare_shareable(ctx_a, shareable, shareable_len);
-        print_cmp_rc("compare_shareable(ctx_a, shareable)", rc);
-        if (rc != DVCO_CP_OK) {
-            fprintf(stderr, "compare_shareable failed against original ctx_a\n");
-            print_provider_last_error(api, ctx_a);
-            goto done;
-        }
+    rc = api->compare_shareable(ctx_b, shareable, shareable_len);
+    print_cmp_rc("compare_shareable(ctx_b, shareable)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_shareable failed after deserialize_shareable\n");
+        print_provider_last_error(api, ctx_b);
+        goto done;
     }
 
-    if (api->serialize_private != NULL) {
-        rc = alloc_via_provider_2call(api->serialize_private, ctx_a, &private_blob, &private_blob_len);
-        print_rc("serialize_private(ctx_a)", rc);
-        if (rc == DVCO_CP_OK) {
-            dump_hex("private", private_blob, private_blob_len);
-        } else if (rc != DVCO_CP_ERR_NOT_SUPPORTED) {
-            print_provider_last_error(api, ctx_a);
-            goto done;
-        }
+    rc = api->compare_shareable(ctx_a, shareable, shareable_len);
+    print_cmp_rc("compare_shareable(ctx_a, shareable)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_shareable failed against original ctx_a\n");
+        print_provider_last_error(api, ctx_a);
+        goto done;
     }
 
-    if ((api->deserialize_private != NULL) && (private_blob != NULL)) {
-        rc = api->create(kv.items, kv.count, &ctx_c);
-        print_rc("create(ctx_c)", rc);
-        if (rc != DVCO_CP_OK || ctx_c == NULL) {
-            print_provider_last_error(api, ctx_c);
-            goto done;
-        }
+    rc = alloc_via_provider_2call(api->serialize_private, ctx_a, &private_blob, &private_blob_len);
+    print_rc("serialize_private(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+    dump_hex("private", private_blob, private_blob_len);
 
-        rc = api->deserialize_private(ctx_c, private_blob, private_blob_len);
-        print_rc("deserialize_private(ctx_c)", rc);
-        if (rc != DVCO_CP_OK) {
-            print_provider_last_error(api, ctx_c);
-            goto done;
-        }
+    rc = api->create(kv.items, kv.count, &ctx_c);
+    print_rc("create(ctx_c)", rc);
+    if (rc != DVCO_CP_OK || ctx_c == NULL) {
+        print_provider_last_error(api, ctx_c);
+        goto done;
+    }
 
-        if (api->compare_private != NULL) {
-            rc = api->compare_private(ctx_c, private_blob, private_blob_len);
-            print_cmp_rc("compare_private(ctx_c, private_blob)", rc);
-            if (rc != DVCO_CP_OK) {
-                fprintf(stderr, "compare_private failed after deserialize_private\n");
-                print_provider_last_error(api, ctx_c);
-                goto done;
-            }
+    rc = api->deserialize_private(ctx_c, private_blob, private_blob_len);
+    print_rc("deserialize_private(ctx_c)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_c);
+        goto done;
+    }
 
-            rc = api->compare_private(ctx_a, private_blob, private_blob_len);
-            print_cmp_rc("compare_private(ctx_a, private_blob)", rc);
-            if (rc != DVCO_CP_OK) {
-                fprintf(stderr, "compare_private failed against original ctx_a\n");
-                print_provider_last_error(api, ctx_a);
-                goto done;
-            }
-        }
+    rc = api->compare_private(ctx_c, private_blob, private_blob_len);
+    print_cmp_rc("compare_private(ctx_c, private_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_private failed after deserialize_private\n");
+        print_provider_last_error(api, ctx_c);
+        goto done;
+    }
+
+    rc = api->compare_private(ctx_a, private_blob, private_blob_len);
+    print_cmp_rc("compare_private(ctx_a, private_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_private failed against original ctx_a\n");
+        print_provider_last_error(api, ctx_a);
+        goto done;
     }
 
     rc = alloc_decrypt_2call(api, ctx_b, ciphertext, ciphertext_len, &plaintext_out, &plaintext_out_len);

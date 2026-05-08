@@ -10,6 +10,7 @@ ${PROGFOLDER}/bench_cipher_provider \
 --cipher ${CIPHERFOLDER}/libaes_gcm_provider.so \
 --confstring "" \
 --size ${SIZE} \
---iters ${ITERS}
+--iters ${ITERS} \
+--decrypt-mode cycle
 
 
