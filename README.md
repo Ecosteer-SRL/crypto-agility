@@ -1,4 +1,4 @@
-e<p align="left">
+<p align="left">
   <img src="docs/media/ecosteer-logo.png" alt="Ecosteer logo" width="220">
 </p>
 <p>
@@ -2009,19 +2009,39 @@ Decide whether private and shareable are:
 
 Document the reason.
 
-## Step 6: define ciphertext framing
+## Step 6: define ciphertext framing and context reuse
 
-Choose how encrypt() packages per-message metadata such as:
+Choose how encrypt() packages provider-owned per-message metadata such as:
 
   - IV
 
   - nonce
 
-  - tag
+  - authentication tag
+
+  - tweak material
 
   - framing lengths
 
-Then implement decrypt() to consume exactly that layout.
+  - algorithm-specific header fields
+
+The ciphertext format emitted by encrypt() is opaque to the caller.
+
+decrypt() must consume exactly the ciphertext format emitted by the
+corresponding encrypt() implementation.
+
+encrypt() and decrypt() must not consume or invalidate the provider
+material installed in the context.
+
+After each encrypt() or decrypt() call, the context must remain valid for
+subsequent operations without requiring the caller to call
+deserialize_shareable(), deserialize_private(), rotate(), or any other
+material-installation function again.
+
+If the underlying cipher implementation needs per-message state handling,
+such as IV reconstruction, nonce handling, tag validation, tweak handling,
+counter updates, or temporary state changes, that logic must be
+encapsulated inside the provider implementation.
 
 ## Step 7: decide AAD policy
 
