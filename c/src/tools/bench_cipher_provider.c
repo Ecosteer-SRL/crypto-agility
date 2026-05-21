@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.3
+// ver: 1.4
 
 // bench_cipher_provider.c
 //
@@ -13,6 +13,7 @@
 // - Resolve dvco_cipher_provider_get_api()
 // - Exercise the provider through the current cipher_provider.h vtable ABI
 // - Measure provider-neutral encryption and decryption throughput
+// - Adapt benchmark lifecycle to provider category metadata
 //
 // Benchmark semantics
 // -------------------
@@ -23,14 +24,14 @@
 // - Decryption benchmark supports two modes:
 //     reuse:
 //         create decrypt context once
-//         deserialize_shareable into decrypt context once
+//         import decrypt-capable material once
 //         repeat N times:
 //             decrypt reference ciphertext
 //         destroy decrypt context
 //     cycle:
 //         repeat N times:
 //             create decrypt context
-//             deserialize_shareable into decrypt context
+//             import decrypt-capable material
 //             decrypt reference ciphertext
 //             destroy decrypt context
 // - reuse is the default mode and reflects the normal cipher-instance lifecycle.
@@ -167,6 +168,61 @@ static int parse_decrypt_mode(const char *s, decrypt_mode_t *out) {
     return -1;
 }
 
+
+
+static uint16_t get_main_category(const dvco_cipher_provider_info_t *info) {
+    if (info == NULL) {
+        return CRAG_PROVIDER_CATEGORY_UNSPECIFIED;
+    }
+
+    return (uint16_t)(info->category_flags & CRAG_PROVIDER_CATEGORY_MASK);
+}
+
+static uint16_t get_category_variant(const dvco_cipher_provider_info_t *info) {
+    if (info == NULL) {
+        return 0u;
+    }
+
+    return (uint16_t)((info->category_flags & CRAG_PROVIDER_CATEGORY_VARIANT_MASK) >> 8);
+}
+
+static const char *category_name(uint16_t category) {
+    switch (category) {
+        case CRAG_PROVIDER_CATEGORY_SYMMETRIC:
+            return "symmetric";
+        case CRAG_PROVIDER_CATEGORY_ASYMMETRIC:
+            return "asymmetric";
+        case CRAG_PROVIDER_CATEGORY_UNSPECIFIED:
+            return "unspecified";
+        default:
+            return "unknown";
+    }
+}
+
+static int validate_provider_category(const dvco_cipher_provider_info_t *info) {
+    uint16_t category;
+    uint16_t variant;
+
+    if (info == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    category = get_main_category(info);
+    variant = get_category_variant(info);
+
+    if (variant != 0u) {
+        fprintf(stderr, "Unsupported provider category variant: %u\n", (unsigned)variant);
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    if (category != CRAG_PROVIDER_CATEGORY_SYMMETRIC &&
+        category != CRAG_PROVIDER_CATEGORY_ASYMMETRIC) {
+        fprintf(stderr, "Unsupported provider category: %u\n", (unsigned)category);
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    return DVCO_CP_OK;
+}
 
 static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
     int i;
@@ -870,6 +926,180 @@ static int run_decrypt_cycle_bench(
     return DVCO_CP_OK;
 }
 
+
+static int run_decrypt_private_reuse_bench(
+    const dvco_cipher_provider_api_t *api,
+    const dvco_kv_t *cfg_items,
+    size_t cfg_count,
+    const uint8_t *private_blob,
+    size_t private_blob_len,
+    const uint8_t *cipher_data,
+    size_t cipher_len,
+    uint8_t *plain_buf,
+    size_t plain_cap,
+    size_t measured_plain_len,
+    size_t iters,
+    bench_result_t *res
+) {
+    struct timespec t0;
+    struct timespec t1;
+    dvco_cipher_ctx_t *ctx = NULL;
+    dvco_buf_t out;
+    size_t i;
+    int rc;
+    double seconds;
+    double total_bytes;
+
+    if (api == NULL ||
+        api->create == NULL ||
+        api->destroy == NULL ||
+        api->deserialize_private == NULL ||
+        api->decrypt == NULL ||
+        private_blob == NULL ||
+        cipher_data == NULL ||
+        plain_buf == NULL ||
+        res == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    rc = api->create(cfg_items, cfg_count, &ctx);
+    if (rc != DVCO_CP_OK || ctx == NULL) {
+        if (ctx != NULL) {
+            api->destroy(ctx);
+        }
+        return rc;
+    }
+
+    rc = api->deserialize_private(ctx, private_blob, private_blob_len);
+    if (rc != DVCO_CP_OK) {
+        api->destroy(ctx);
+        return rc;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &t0) != 0) {
+        perror("clock_gettime decrypt start");
+        api->destroy(ctx);
+        return DVCO_CP_ERR_GENERIC;
+    }
+
+    for (i = 0u; i < iters; i++) {
+        out.data = plain_buf;
+        out.len = plain_cap;
+        out.cap = plain_cap;
+
+        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+        if (rc != DVCO_CP_OK) {
+            api->destroy(ctx);
+            return rc;
+        }
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0) {
+        perror("clock_gettime decrypt stop");
+        api->destroy(ctx);
+        return DVCO_CP_ERR_GENERIC;
+    }
+
+    api->destroy(ctx);
+
+    res->dec_ms = elapsed_ms(&t0, &t1);
+    seconds = res->dec_ms / 1000.0;
+    total_bytes = (double)measured_plain_len * (double)iters;
+
+    if (seconds > 0.0) {
+        res->dec_ops_sec = (double)iters / seconds;
+        res->dec_mib_sec = total_bytes / seconds / 1024.0 / 1024.0;
+    }
+
+    return DVCO_CP_OK;
+}
+
+static int run_decrypt_private_cycle_bench(
+    const dvco_cipher_provider_api_t *api,
+    const dvco_kv_t *cfg_items,
+    size_t cfg_count,
+    const uint8_t *private_blob,
+    size_t private_blob_len,
+    const uint8_t *cipher_data,
+    size_t cipher_len,
+    uint8_t *plain_buf,
+    size_t plain_cap,
+    size_t measured_plain_len,
+    size_t iters,
+    bench_result_t *res
+) {
+    struct timespec t0;
+    struct timespec t1;
+    dvco_buf_t out;
+    size_t i;
+    int rc;
+    double seconds;
+    double total_bytes;
+
+    if (api == NULL ||
+        api->create == NULL ||
+        api->destroy == NULL ||
+        api->deserialize_private == NULL ||
+        api->decrypt == NULL ||
+        private_blob == NULL ||
+        cipher_data == NULL ||
+        plain_buf == NULL ||
+        res == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &t0) != 0) {
+        perror("clock_gettime decrypt cycle start");
+        return DVCO_CP_ERR_GENERIC;
+    }
+
+    for (i = 0u; i < iters; i++) {
+        dvco_cipher_ctx_t *ctx = NULL;
+
+        rc = api->create(cfg_items, cfg_count, &ctx);
+        if (rc != DVCO_CP_OK || ctx == NULL) {
+            if (ctx != NULL) {
+                api->destroy(ctx);
+            }
+            return rc;
+        }
+
+        rc = api->deserialize_private(ctx, private_blob, private_blob_len);
+        if (rc != DVCO_CP_OK) {
+            api->destroy(ctx);
+            return rc;
+        }
+
+        out.data = plain_buf;
+        out.len = plain_cap;
+        out.cap = plain_cap;
+
+        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+
+        api->destroy(ctx);
+
+        if (rc != DVCO_CP_OK) {
+            return rc;
+        }
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0) {
+        perror("clock_gettime decrypt cycle stop");
+        return DVCO_CP_ERR_GENERIC;
+    }
+
+    res->dec_ms = elapsed_ms(&t0, &t1);
+    seconds = res->dec_ms / 1000.0;
+    total_bytes = (double)measured_plain_len * (double)iters;
+
+    if (seconds > 0.0) {
+        res->dec_ops_sec = (double)iters / seconds;
+        res->dec_mib_sec = total_bytes / seconds / 1024.0 / 1024.0;
+    }
+
+    return DVCO_CP_OK;
+}
+
 static void print_results(
     const app_cfg_t *cfg,
     const dvco_cipher_provider_info_t *info,
@@ -883,6 +1113,11 @@ static void print_results(
     printf("abi                   : %u.%u\n", info->abi_major, info->abi_minor);
     printf("pad_apply             : %s\n", info->pad_apply ? "true" : "false");
     printf("pad_block_size        : %zu\n", info->pad_block_size);
+    printf("category              : %s (%u)\n",
+           category_name(get_main_category(info)),
+           (unsigned)get_main_category(info));
+    printf("category variant      : %u\n", (unsigned)get_category_variant(info));
+    printf("category raw          : 0x%04x\n", (unsigned)info->category_flags);
     printf("cleartext size        : %zu bytes\n", cfg->plain_len);
     printf("encrypt input size    : %zu bytes\n", encrypt_input_len);
     printf("ciphertext size       : %zu bytes\n", ciphertext_len);
@@ -922,11 +1157,14 @@ int main(int argc, char **argv) {
     dvco_cipher_provider_info_t info;
 
     dvco_cipher_ctx_t *ctx_enc = NULL;
+    dvco_cipher_ctx_t *ctx_pub = NULL;
     dvco_cipher_ctx_t *ctx_dec_check = NULL;
+    dvco_cipher_ctx_t *ctx_bench_enc = NULL;
 
     uint8_t *plain = NULL;
     uint8_t *encrypt_input = NULL;
     uint8_t *shareable = NULL;
+    uint8_t *private_blob = NULL;
     uint8_t *ciphertext_ref = NULL;
     uint8_t *ciphertext_work = NULL;
     uint8_t *decrypted_raw = NULL;
@@ -935,6 +1173,7 @@ int main(int argc, char **argv) {
 
     size_t encrypt_input_len = 0u;
     size_t shareable_len = 0u;
+    size_t private_blob_len = 0u;
     size_t ciphertext_ref_len = 0u;
     size_t ciphertext_work_cap = 0u;
     size_t decrypted_raw_len = 0u;
@@ -942,6 +1181,7 @@ int main(int argc, char **argv) {
     size_t bench_decrypt_cap = 0u;
 
     bench_result_t res;
+    uint16_t main_category;
     int rc;
     int exit_code = 1;
 
@@ -1002,6 +1242,18 @@ int main(int argc, char **argv) {
         goto done;
     }
 
+    rc = validate_provider_category(&info);
+    if (rc != DVCO_CP_OK) {
+        goto done;
+    }
+    main_category = get_main_category(&info);
+
+    if (main_category == CRAG_PROVIDER_CATEGORY_ASYMMETRIC &&
+        (api->serialize_private == NULL || api->deserialize_private == NULL)) {
+        fprintf(stderr, "Asymmetric provider requires serialize_private and deserialize_private for this benchmark\n");
+        goto done;
+    }
+
     rc = api->create(kv.items, kv.count, &ctx_enc);
     if (rc != DVCO_CP_OK || ctx_enc == NULL) {
         print_provider_op_error("create(ctx_enc)", rc, api, ctx_enc);
@@ -1034,10 +1286,40 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    rc = api->deserialize_shareable(ctx_dec_check, shareable, shareable_len);
-    if (rc != DVCO_CP_OK) {
-        print_provider_op_error("deserialize_shareable(ctx_dec_check)", rc, api, ctx_dec_check);
-        goto done;
+    if (main_category == CRAG_PROVIDER_CATEGORY_SYMMETRIC) {
+        rc = api->deserialize_shareable(ctx_dec_check, shareable, shareable_len);
+        if (rc != DVCO_CP_OK) {
+            print_provider_op_error("deserialize_shareable(ctx_dec_check)", rc, api, ctx_dec_check);
+            goto done;
+        }
+
+        ctx_bench_enc = ctx_enc;
+    } else {
+        rc = alloc_via_provider_2call(api->serialize_private, ctx_enc, &private_blob, &private_blob_len);
+        if (rc != DVCO_CP_OK) {
+            print_provider_op_error("serialize_private(ctx_enc)", rc, api, ctx_enc);
+            goto done;
+        }
+
+        rc = api->create(kv.items, kv.count, &ctx_pub);
+        if (rc != DVCO_CP_OK || ctx_pub == NULL) {
+            print_provider_op_error("create(ctx_pub)", rc, api, ctx_pub);
+            goto done;
+        }
+
+        rc = api->deserialize_shareable(ctx_pub, shareable, shareable_len);
+        if (rc != DVCO_CP_OK) {
+            print_provider_op_error("deserialize_shareable(ctx_pub)", rc, api, ctx_pub);
+            goto done;
+        }
+
+        rc = api->deserialize_private(ctx_dec_check, private_blob, private_blob_len);
+        if (rc != DVCO_CP_OK) {
+            print_provider_op_error("deserialize_private(ctx_dec_check)", rc, api, ctx_dec_check);
+            goto done;
+        }
+
+        ctx_bench_enc = ctx_pub;
     }
 
     rc = alloc_pad_if_needed(&info, plain, cfg.plain_len, &encrypt_input, &encrypt_input_len);
@@ -1046,9 +1328,9 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    rc = alloc_encrypt_2call(api, ctx_enc, encrypt_input, encrypt_input_len, &ciphertext_ref, &ciphertext_ref_len);
+    rc = alloc_encrypt_2call(api, ctx_bench_enc, encrypt_input, encrypt_input_len, &ciphertext_ref, &ciphertext_ref_len);
     if (rc != DVCO_CP_OK) {
-        print_provider_op_error("encrypt(correctness)", rc, api, ctx_enc);
+        print_provider_op_error("encrypt(correctness)", rc, api, ctx_bench_enc);
         goto done;
     }
 
@@ -1070,11 +1352,16 @@ int main(int argc, char **argv) {
     }
 
     bench_decrypt_cap = decrypted_raw_len;
-    bench_decrypt_buf = (uint8_t *)malloc(bench_decrypt_cap > 0u ? bench_decrypt_cap : 1u);
-    if (bench_decrypt_buf == NULL) {
-        fprintf(stderr, "malloc decrypt benchmark buffer failed\n");
-        goto done;
+
+    if (ciphertext_ref_len > bench_decrypt_cap) {
+        bench_decrypt_cap = ciphertext_ref_len;
     }
+
+    bench_decrypt_buf = (uint8_t *)malloc(bench_decrypt_cap > 0u ? bench_decrypt_cap : 1u);
+        if (bench_decrypt_buf == NULL) {
+            fprintf(stderr, "malloc decrypt benchmark buffer failed\n");
+            goto done;
+        }
 
     ciphertext_work_cap = ciphertext_ref_len;
     ciphertext_work = (uint8_t *)malloc(ciphertext_work_cap > 0u ? ciphertext_work_cap : 1u);
@@ -1085,7 +1372,7 @@ int main(int argc, char **argv) {
 
     rc = run_encrypt_bench(
         api,
-        ctx_enc,
+        ctx_bench_enc,
         encrypt_input,
         encrypt_input_len,
         ciphertext_work,
@@ -1094,40 +1381,74 @@ int main(int argc, char **argv) {
         &res
     );
     if (rc != DVCO_CP_OK) {
-        print_provider_op_error("encrypt benchmark", rc, api, ctx_enc);
+        print_provider_op_error("encrypt benchmark", rc, api, ctx_bench_enc);
         goto done;
     }
 
-    if (cfg.decrypt_mode == DECRYPT_MODE_CYCLE) {
-        rc = run_decrypt_cycle_bench(
-            api,
-            kv.items,
-            kv.count,
-            shareable,
-            shareable_len,
-            ciphertext_ref,
-            ciphertext_ref_len,
-            bench_decrypt_buf,
-            bench_decrypt_cap,
-            encrypt_input_len,
-            cfg.iters,
-            &res
-        );
+    if (main_category == CRAG_PROVIDER_CATEGORY_SYMMETRIC) {
+        if (cfg.decrypt_mode == DECRYPT_MODE_CYCLE) {
+            rc = run_decrypt_cycle_bench(
+                api,
+                kv.items,
+                kv.count,
+                shareable,
+                shareable_len,
+                ciphertext_ref,
+                ciphertext_ref_len,
+                bench_decrypt_buf,
+                bench_decrypt_cap,
+                encrypt_input_len,
+                cfg.iters,
+                &res
+            );
+        } else {
+            rc = run_decrypt_reuse_bench(
+                api,
+                kv.items,
+                kv.count,
+                shareable,
+                shareable_len,
+                ciphertext_ref,
+                ciphertext_ref_len,
+                bench_decrypt_buf,
+                bench_decrypt_cap,
+                encrypt_input_len,
+                cfg.iters,
+                &res
+            );
+        }
     } else {
-        rc = run_decrypt_reuse_bench(
-            api,
-            kv.items,
-            kv.count,
-            shareable,
-            shareable_len,
-            ciphertext_ref,
-            ciphertext_ref_len,
-            bench_decrypt_buf,
-            bench_decrypt_cap,
-            encrypt_input_len,
-            cfg.iters,
-            &res
-        );
+        if (cfg.decrypt_mode == DECRYPT_MODE_CYCLE) {
+            rc = run_decrypt_private_cycle_bench(
+                api,
+                kv.items,
+                kv.count,
+                private_blob,
+                private_blob_len,
+                ciphertext_ref,
+                ciphertext_ref_len,
+                bench_decrypt_buf,
+                bench_decrypt_cap,
+                encrypt_input_len,
+                cfg.iters,
+                &res
+            );
+        } else {
+            rc = run_decrypt_private_reuse_bench(
+                api,
+                kv.items,
+                kv.count,
+                private_blob,
+                private_blob_len,
+                ciphertext_ref,
+                ciphertext_ref_len,
+                bench_decrypt_buf,
+                bench_decrypt_cap,
+                encrypt_input_len,
+                cfg.iters,
+                &res
+            );
+        }
     }
     if (rc != DVCO_CP_OK) {
         print_provider_op_error("decrypt benchmark", rc, api, NULL);
@@ -1147,11 +1468,15 @@ done:
     secure_zero_free(ciphertext_work, ciphertext_work_cap);
 
     free(shareable);
+    secure_zero_free(private_blob, private_blob_len);
     free(ciphertext_ref);
     free(decrypted_raw);
 
     if (api != NULL && ctx_enc != NULL && api->destroy != NULL) {
         api->destroy(ctx_enc);
+    }
+    if (api != NULL && ctx_pub != NULL && api->destroy != NULL) {
+        api->destroy(ctx_pub);
     }
     if (api != NULL && ctx_dec_check != NULL && api->destroy != NULL) {
         api->destroy(ctx_dec_check);

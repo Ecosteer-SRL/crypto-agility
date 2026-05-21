@@ -55,6 +55,8 @@ LDLIBS_AES_XTS_SO               := -lcrypto
 LDLIBS_ASCON_AEAD128_SO         := -lcrypto
 LDLIBS_CHACHA20_POLY1305_SO     := -lcrypto
 LDLIBS_BLOWFISH_ECB_SO          := -lcrypto
+LDLIBS_RSA_OAEP_SO              := -lcrypto
+LDLIBS_RSA_OAEP_AES_GCM_SO      := -lcrypto
 
 LDLIBS_RL_TOOL                  := -ldl
 
@@ -70,7 +72,9 @@ LIBS := \
 	libaes_xts_provider.so \
 	libascon_aead128_provider.so \
 	libchacha20_poly1305_provider.so \
-	libblowfish_ecb_provider.so
+	libblowfish_ecb_provider.so \
+	librsa_oaep_provider.so \
+	librsa_oaep_aes_gcm_provider.so
 
 OBJS_test_cipher_provider := \
 	$(OBJDIR)/test_cipher_provider.o \
@@ -108,6 +112,12 @@ OBJS_libchacha20_poly1305_provider := \
 OBJS_libblowfish_ecb_provider := \
 	$(OBJDIR)/blowfish_ecb_provider.o
 
+OBJS_librsa_oaep_provider := \
+	$(OBJDIR)/rsa_oaep_provider.o
+
+OBJS_librsa_oaep_aes_gcm_provider := \
+	$(OBJDIR)/rsa_oaep_aes_gcm_provider.o
+
 ALL_OBJS := \
 	$(OBJS_test_cipher_provider) \
 	$(OBJS_bench_cipher_provider) \
@@ -118,7 +128,9 @@ ALL_OBJS := \
 	$(OBJS_libaes_xts_provider) \
 	$(OBJS_libascon_aead128_provider) \
 	$(OBJS_libchacha20_poly1305_provider) \
-	$(OBJS_libblowfish_ecb_provider)
+	$(OBJS_libblowfish_ecb_provider) \
+	$(OBJS_librsa_oaep_provider) \
+	$(OBJS_librsa_oaep_aes_gcm_provider)
 
 ALL_DEPS := $(ALL_OBJS:.o=.d)
 
@@ -133,6 +145,8 @@ SO_libaes_xts_provider := $(LIBDIR)/libaes_xts_provider.so
 SO_libascon_aead128_provider := $(LIBDIR)/libascon_aead128_provider.so
 SO_libchacha20_poly1305_provider := $(LIBDIR)/libchacha20_poly1305_provider.so
 SO_libblowfish_ecb_provider := $(LIBDIR)/libblowfish_ecb_provider.so
+SO_librsa_oaep_provider := $(LIBDIR)/librsa_oaep_provider.so
+SO_librsa_oaep_aes_gcm_provider := $(LIBDIR)/librsa_oaep_aes_gcm_provider.so
 
 ALL_BINS := \
 	$(BIN_test_cipher_provider) \
@@ -146,7 +160,9 @@ ALL_LIBS := \
 	$(SO_libaes_xts_provider) \
 	$(SO_libascon_aead128_provider) \
 	$(SO_libchacha20_poly1305_provider) \
-	$(SO_libblowfish_ecb_provider)
+	$(SO_libblowfish_ecb_provider) \
+	$(SO_librsa_oaep_provider) \
+	$(SO_librsa_oaep_aes_gcm_provider)
 
 .PHONY: all build_cfg debug release callgrind clean clean_debug clean_release clean_callgrind
 
@@ -215,6 +231,14 @@ $(OBJDIR)/blowfish_ecb_provider.o: $(COMMON_SRC_DIR)/blowfish_ecb_provider.c $(C
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
 
+$(OBJDIR)/rsa_oaep_provider.o: $(COMMON_SRC_DIR)/rsa_oaep_provider.c $(COMMON_INC_CIPHERS_DIR)/cipher_provider.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
+
+$(OBJDIR)/rsa_oaep_aes_gcm_provider.o: $(COMMON_SRC_DIR)/rsa_oaep_aes_gcm_provider.c $(COMMON_INC_CIPHERS_DIR)/cipher_provider.h
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
+
 $(OBJDIR)/dvco_padding.o: $(PADDING_SRC_DIR)/dvco_padding.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_COMMON) $(CFLAGS_CFG) -c $< -o $@
@@ -250,6 +274,14 @@ $(SO_libchacha20_poly1305_provider): $(OBJS_libchacha20_poly1305_provider)
 $(SO_libblowfish_ecb_provider): $(OBJS_libblowfish_ecb_provider)
 	@mkdir -p $(@D)
 	$(CC) -shared -o $@ $^ $(LDLIBS_BLOWFISH_ECB_SO)
+
+$(SO_librsa_oaep_provider): $(OBJS_librsa_oaep_provider)
+	@mkdir -p $(@D)
+	$(CC) -shared -o $@ $^ $(LDLIBS_RSA_OAEP_SO)
+
+$(SO_librsa_oaep_aes_gcm_provider): $(OBJS_librsa_oaep_aes_gcm_provider)
+	@mkdir -p $(@D)
+	$(CC) -shared -o $@ $^ $(LDLIBS_RSA_OAEP_AES_GCM_SO)
 
 $(BIN_test_cipher_provider): $(OBJS_test_cipher_provider)
 	@mkdir -p $(@D)

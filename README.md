@@ -368,35 +368,18 @@ A framework for runtime replacement, coexistence, rotation, installation, and lo
 -->
 # Overview
 
-This framework was conceived to explore, in practical implementation
-terms, one possible way to achieve a high degree of cipher agility in a
-live system. Its objective is not merely to abstract cipher calls, but
-to enable the runtime replacement, coexistence, rotation, installation,
-and long-term evolution of cryptographic providers without requiring
-redesign of the surrounding Ecosteer DVCO (Data Visibility Control Overlay) stack. 
-In this sense, the project can be read as a pragmatic architectural response 
-to the broader problem of cryptographic agility.
+This framework was conceived to explore, in practical implementation terms, one possible way to achieve a high degree of cipher agility in a live system. Its objective is not merely to abstract cipher calls, but to enable the runtime replacement, coexistence, rotation, installation, and long-term evolution of cryptographic providers without requiring redesign of the higher-level solution architecture. In this sense, the project can be read as a pragmatic architectural response to the broader problem of cryptographic agility.
 
 This direction appears strongly convergent with the perspective later
 articulated by NIST in [December 2025 in CSWP 39, Considerations for
 Achieving Cryptographic Agility: Strategies and Practices](https://csrc.nist.gov/pubs/cswp/39/considerations-for-achieving-cryptographic-agility/final). NIST frames
 cryptographic agility as the capability to replace and adapt
 cryptographic algorithms while preserving security and ongoing
-operations. The DVCO cipher provider framework explores one concrete
-implementation path toward that goal by isolating cipher-specific logic
-behind a stable provider ABI and by enabling provider-defined state
-serialization, runtime selection, and rotation within an otherwise
-unchanged outer protocol.
+operations. The provider framework in this repository explores one concrete implementation path toward that goal by isolating provider-specific cryptographic logic behind a stable ABI and by enabling provider-defined state serialization, runtime selection, and rotation within an otherwise unchanged higher-level architecture.
 
-More specifically, the DVCO cipher provider framework defines the ABI
-used by runtime-loadable cipher plugins for the DVCO publisher and
-subscriber stacks. A cipher provider encapsulates all cipher-specific
-logic behind a stable vtable so that the outer DVCO protocol and the
-pub/proxy/sub flow do not need to be redesigned when introducing a new
-cipher.
+More specifically, the provider framework defines the ABI used by runtime-loadable cryptographic provider plugins. A provider encapsulates all provider-specific cryptographic logic behind a stable vtable so that the higher-level application architecture does not need to be redesigned when introducing, replacing, or rotating a provider.
 
-In practice, the provider framework gives the DVCO stack a concrete
-mechanism for cryptographic agility. The outer stack selects a provider
+In practice, the provider framework gives the surrounding application a concrete mechanism for cryptographic agility. The outer stack selects a provider
 by fixed cid, creates a provider instance, rotates or installs provider
 state, and then delegates encryption, decryption, and state
 serialization to the provider. The stack treats provider outputs as
@@ -412,6 +395,9 @@ implementation classes, including:
 
   - AEAD ciphers
 
+  - asymmetric encryption providers
+
+
 A provider may define its own internal framing for ciphertext, shareable
 state, and private state, provided that it respects the common ABI,
 lifecycle, and buffer/output conventions documented here.
@@ -425,11 +411,10 @@ The framework solves four practical problems:
   - transport of receiver-installable cryptographic state through
     provider-defined serialized blobs
 
-  - decoupling of outer DVCO framing from cipher-specific details such
-    as IVs, nonces, tags, and key blob formats
+  - decoupling of higher-level application framing from provider-specific details such as IVs, nonces, tags, padding behavior, and key blob formats.
 
 The provider ABI should therefore be understood as a stable developer
-contract for implementing new cipher modules.
+contract for implementing new cryptographic provider modules.
 
 At the time of writing, the framework has been validated both
 conceptually and practically. At the conceptual level, the provider ABI
@@ -469,20 +454,35 @@ requirements.
 
 ## Provider metadata
 
-Each provider exports metadata through get\_info(). This metadata
+Each provider exports metadata through get_info(). This metadata
 describes:
 
   - ABI compatibility
 
   - provider identity and descriptive strings
 
-  - fixed cipher selector **cid**
+  - fixed provider selector **cid**
+
+  - provider category through **category_flags**
 
   - padding expectations exposed to the upper layer
 
 The metadata is static for the provider implementation. In particular,
 **cid** is fixed per provider family and is not instance-specific
 runtime state.
+
+**category_flags** is also static provider metadata. It tells the caller
+which high-level provider category the implementation belongs to.
+
+At the current stage, category_flags is used to distinguish at least:
+
+  - symmetric providers
+
+  - asymmetric providers
+
+This allows tools and upper layers to select the correct interpretation
+of shareable/private material and the correct test or benchmark path
+without changing the provider vtable.
 
 ## Provider instance state
 
@@ -694,6 +694,8 @@ On success, out\_info must be fully initialized with:
 
   - cid
 
+  - category\_flags
+
   - pad\_apply
 
   - pad\_block\_size
@@ -709,6 +711,24 @@ The out_info structure itself (**dvco_cipher_provider_info_t**) is allocated by 
 **cid** is the fixed selector used by the stack to identify and resolve the corresponding cipher provider. It is provider-defined but fixed for that provider implementation, and it must remain consistent with the mapping logic used by the stack.
 
 **cid** is used as a compact fixed identifier to simplify the upper security protocol. By referring to providers through a stable numeric selector, the surrounding DVCO stack can resolve, install, and rotate providers without carrying more verbose algorithm descriptors in the protocol itself. The disadvantage of this choice is that **cid** values must be globally unique within the intended interoperability domain. As a consequence, some coordination among developers is required, since uniqueness of **cid** assignments is a governance constraint that cannot be guaranteed by the ABI alone.
+
+**category\_flags** is a bitmask describing the high-level provider category.
+It allows callers, tools, and upper layers to distinguish provider families
+whose serialized material and operation semantics may differ.
+
+For example, symmetric and asymmetric providers may both expose
+serialize_shareable(), serialize_private(), compare_shareable(), and
+compare_private(), but the meaning of the corresponding blobs may differ.
+
+For a symmetric provider, the shareable blob may contain material required
+to install equivalent decrypt-capable state in another context.
+
+For an asymmetric provider, the shareable blob may represent public material,
+while the private blob may represent private material that must remain local
+and protected.
+
+The caller must therefore interpret serialized material according to the
+provider category returned by get_info().
 
 ## Padding metadata
 
@@ -727,6 +747,20 @@ Important: providers whose underlying crypto library performs internal
 mode padding should expose metadata consistent with the actual stack
 behavior. The metadata must describe what the upper layer must do, not
 merely what the cipher family does in theory.
+
+## Category metadata
+
+category\_flags is a bitmask.
+
+The current category flags are:
+
+  - CRAG\_PROVIDER\_CATEGORY\_SYMMETRIC
+
+  - CRAG\_PROVIDER\_CATEGORY\_ASYMMETRIC
+
+A provider must set exactly the category bits that describe its high-level
+operation model.
+
 
 ## Error conditions
 
@@ -1592,6 +1626,20 @@ beyond out-\>cap.
 Provider authors must document clearly what their two serialization
 families mean.
 
+The exact semantics depend on the provider category returned by get_info()
+through category_flags.
+
+For symmetric providers, shareable material commonly represents the
+provider-defined material needed by another context to reconstruct usable
+decrypt state.
+
+For asymmetric providers, shareable material may represent public material,
+while private material may represent private provider-owned secret material.
+
+The framework does not impose one universal blob meaning across all provider
+categories. Instead, it requires each provider category and each provider
+implementation to document the meaning of its shareable and private formats.
+
 ## Shareable means
 
 The serialized state that may be propagated to another DVCO component so
@@ -2189,6 +2237,35 @@ Main documentation focus:
 
   - no plaintext output on auth failure
 
+## Asymmetric encryption provider
+
+Typical characteristics:
+
+  - uses distinct public and private material
+
+  - shareable material may represent public material
+
+  - private material may represent private decrypt-capable material
+
+  - ciphertext size may be constrained by key size, padding scheme, or
+    asymmetric algorithm limits
+
+  - encryption and decryption semantics may differ from symmetric providers
+
+Main documentation focus:
+
+  - meaning of shareable material
+
+  - meaning and protection requirements of private material
+
+  - maximum plaintext size
+
+  - ciphertext size and framing
+
+  - padding or encoding scheme
+
+  - whether rotate() generates a new key pair or activates existing material  
+
 # Final Notes for Provider Authors
 
 The most important implementation rule is consistency.
@@ -2224,7 +2301,4 @@ But once chosen, these must remain internally coherent across:
   - destroy
 
 The DVCO core relies on the provider ABI to be stable, opaque, and
-predictable. A well-implemented provider is not one that merely encrypts
-and decrypts, but one that makes lifecycle, state transitions,
-serialization, error handling, and interoperability explicit and
-reliable.
+predictable. A well-implemented provider is not one that merely performs its cryptographic operation, but one that makes lifecycle, state transitions, serialization, error handling, category semantics, and interoperability explicit and reliable.

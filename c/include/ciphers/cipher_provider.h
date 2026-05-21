@@ -2,7 +2,12 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
+
+//  ver: 1.1
+//  The field category_flag has been added to struct dvco_cipher_provider_info_s
+//  category_flags defines how the upper layer must interpret shareable/private material.
+//  A provider should set exactly one of SYMMETRIC or ASYMMETRIC for now.
 
 #ifndef DVCO_CIPHER_PROVIDER_H
 #define DVCO_CIPHER_PROVIDER_H
@@ -24,13 +29,41 @@
 extern "C" {
 #endif
 
+
 /* =========================
  * ABI / API VERSIONING
  * ========================= */
 
 #define DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR 1u
-#define DVCO_CIPHER_PROVIDER_API_VERSION_MINOR 0u
+#define DVCO_CIPHER_PROVIDER_API_VERSION_MINOR 1u
 
+/* =========================
+ * CATEGORY FLAGS
+ * ========================= */
+/*
+    category_flags defines how the upper layer must interpret
+    shareable/private provider material.
+    
+    For now, a provider SHOULD set exactly one of:
+ 
+    CRAG_PROVIDER_CATEGORY_SYMMETRIC
+    CRAG_PROVIDER_CATEGORY_ASYMMETRIC
+ 
+    SYMMETRIC:
+    serialize_shareable() and serialize_private() return material related
+    to symmetric operational state. Both blobs may contain secret material
+    and must be treated as sensitive unless the provider documents otherwise.
+ 
+    ASYMMETRIC:
+    serialize_shareable() returns public material.
+    serialize_private() returns private material.
+ */
+#define CRAG_PROVIDER_CATEGORY_MASK         0x00FFu
+#define CRAG_PROVIDER_CATEGORY_VARIANT_MASK 0xFF00u
+
+#define CRAG_PROVIDER_CATEGORY_UNSPECIFIED  0x0000u
+#define CRAG_PROVIDER_CATEGORY_SYMMETRIC    0x0001u
+#define CRAG_PROVIDER_CATEGORY_ASYMMETRIC   0x0002u
 
 /* =========================
  * COMMON TYPES
@@ -101,6 +134,8 @@ typedef struct dvco_cipher_provider_info_s {
     bool   pad_apply;               //  if true then the upper layer will have to apply pkcs7 padding
     size_t pad_block_size;          //  in case the upper layer must apply padding - it will have to use this block size
 
+    uint16_t category_flags;        //  tells the upper layer how to treat shareable/private material
+
 } dvco_cipher_provider_info_t;
 
 /* =========================
@@ -110,20 +145,23 @@ typedef struct dvco_cipher_provider_info_s {
 /*
  * Shareable Representation (transported in DVCO "key" field)
  * ----------------------------------------------------------
- * Provider MUST serialize, in a provider-defined opaque payload:
- *   - any data required by the receiver to reconstruct decryption state
- *   - excluding local-only secrets that must not be propagated (if any)
+ * The semantic meaning of shareable material depends on provider category.
  *
- * The caller/wire protocol is responsible for prepending/selecting IID/CID if needed by protocol framing.
- * If your design transports IID/CID inside the same blob, keep it consistent across all stacks.
+ * For SYMMETRIC providers:
+ *   serialize_shareable() normally returns material required by another
+ *   context to reconstruct equivalent operational encrypt/decrypt state.
  *
- * Recommended convention for this API v1:
- *   serialize_shareable() returns only provider opaque bytes
- *   IID/CID are obtained from provider_info and framed by the caller.
+ * For ASYMMETRIC providers:
+ *   serialize_shareable() normally returns public material only.
+ *   Private/decrypt-capable material belongs to serialize_private().
  *
- * (You can change this convention later, but keep it consistent.)
+ * The returned bytes are provider-defined and opaque to the caller.
+ *
+ * The caller/wire protocol is responsible for prepending/selecting IID/CID
+ * if needed by protocol framing.
  */
 
+ 
 /* =========================
  * PROVIDER VTABLE
  * ========================= */

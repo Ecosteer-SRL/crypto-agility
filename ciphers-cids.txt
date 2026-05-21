@@ -1,15 +1,18 @@
 
 preliminary set of cids
 
-cipher			cid
--------------------------------------
-BLOWFISH-ECB        	1u
-AES-CBC             	2u
-AES-CTR             	3u
-CHACHA20-POLY1305   	4u
-AES-GCM             	5u
-ASCON                   6u
-AES-CCM                 7u
-AES-XTS                 8u
+provider/construction	category	cid
+--------------------------------------------
+BLOWFISH-ECB        	symmetric	1u
+AES-CBC             	symmetric       2u
+AES-CTR             	symmetric       3u
+CHACHA20-POLY1305   	symmetric       4u
+AES-GCM             	symmetric       5u
+ASCON                   symmetric       6u
+AES-CCM                 symmetric       7u
+AES-XTS                 symmetric       8u
+
+RSA-OAEP		symmetric       4096u
+RSA-OAEP-AES-GCM        symmetric       4097u
 
 

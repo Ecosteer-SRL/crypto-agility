@@ -173,8 +173,9 @@ static int aes_get_info(dvco_cipher_provider_info_t *out_info)
     out_info->provider_version = DVCO_AES_PROVIDER_VERSION;
     out_info->provider_desc    = DVCO_AES_PROVIDER_DESC;
     out_info->cid              = DVCO_CIPHER_ID;
-    out_info->pad_apply       = false;  //  the cipher pad/unpad
-    out_info->pad_block_size  = 16;
+    out_info->pad_apply         = false;  //  the cipher pad/unpad
+    out_info->pad_block_size    = 16;
+    out_info->category_flags    = CRAG_PROVIDER_CATEGORY_SYMMETRIC;
     return DVCO_CP_OK;
 }
 

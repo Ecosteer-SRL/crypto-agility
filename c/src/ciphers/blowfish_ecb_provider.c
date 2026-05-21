@@ -618,18 +618,19 @@ static int bf_get_info(dvco_cipher_provider_info_t *out_info)
 {
     if (out_info == NULL) return DVCO_CP_ERR_INVALID_ARG;
     memset(out_info, 0, sizeof(*out_info));
-    out_info->abi_major        = DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR;
-    out_info->abi_minor        = DVCO_CIPHER_PROVIDER_API_VERSION_MINOR;
-    out_info->provider_name    = DVCO_BF_ECB_PROVIDER_NAME;
-    out_info->provider_version = DVCO_BF_ECB_PROVIDER_VERSION;
-    out_info->provider_desc    = DVCO_BF_ECB_PROVIDER_DESC;
+    out_info->abi_major         = DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR;
+    out_info->abi_minor         = DVCO_CIPHER_PROVIDER_API_VERSION_MINOR;
+    out_info->provider_name     = DVCO_BF_ECB_PROVIDER_NAME;
+    out_info->provider_version  = DVCO_BF_ECB_PROVIDER_VERSION;
+    out_info->provider_desc     = DVCO_BF_ECB_PROVIDER_DESC;
     out_info->cid = DVCO_CIPHER_ID;
 #ifdef BF_AVOID_PADDING    
-    out_info->pad_apply       = true;
+    out_info->pad_apply         = true;
 #else
-    out_info->pad_apply       = false;
+    out_info->pad_apply         = false;
 #endif        
-    out_info->pad_block_size   = 8;
+    out_info->pad_block_size    = 8;
+    out_info->category_flags    = CRAG_PROVIDER_CATEGORY_SYMMETRIC;
     return DVCO_CP_OK;
 }
 

@@ -561,15 +561,68 @@ static int alloc_decrypt_2call(
 
 
 
-int main(int argc, char **argv) {
-    app_cfg_t cfg;
-    kv_list_t kv = {0};
+static uint16_t get_main_category(const dvco_cipher_provider_info_t *info) {
+    if (info == NULL) {
+        return CRAG_PROVIDER_CATEGORY_UNSPECIFIED;
+    }
+    return (uint16_t)(info->category_flags & CRAG_PROVIDER_CATEGORY_MASK);
+}
 
-    void *dl_handle = NULL;
-    dvco_cipher_provider_get_api_fn get_api_fn = NULL;
-    const dvco_cipher_provider_api_t *api = NULL;
-    dvco_cipher_provider_info_t info;
+static uint16_t get_category_variant(const dvco_cipher_provider_info_t *info) {
+    if (info == NULL) {
+        return 0u;
+    }
+    return (uint16_t)((info->category_flags & CRAG_PROVIDER_CATEGORY_VARIANT_MASK) >> 8);
+}
 
+static const char *category_name(uint16_t category) {
+    switch (category) {
+        case CRAG_PROVIDER_CATEGORY_SYMMETRIC:
+            return "symmetric";
+        case CRAG_PROVIDER_CATEGORY_ASYMMETRIC:
+            return "asymmetric";
+        case CRAG_PROVIDER_CATEGORY_UNSPECIFIED:
+            return "unspecified";
+        default:
+            return "unknown";
+    }
+}
+
+static int validate_provider_category(const dvco_cipher_provider_info_t *info) {
+    uint16_t category;
+    uint16_t variant;
+
+    if (info == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    category = get_main_category(info);
+    variant = get_category_variant(info);
+
+    if (variant != 0u) {
+        fprintf(stderr, "Unsupported category variant: %u\n", (unsigned)variant);
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    if (category != CRAG_PROVIDER_CATEGORY_SYMMETRIC &&
+        category != CRAG_PROVIDER_CATEGORY_ASYMMETRIC) {
+        fprintf(stderr, "Unsupported provider category: %u (%s)\n",
+                (unsigned)category,
+                category_name(category));
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    return DVCO_CP_OK;
+}
+
+static int run_symmetric_provider_test(
+    const dvco_cipher_provider_api_t *api,
+    const dvco_cipher_provider_info_t *info,
+    const kv_list_t *kv,
+    const uint8_t *plain_bytes,
+    size_t plain_len,
+    const char *plain_text
+) {
     dvco_cipher_ctx_t *ctx_a = NULL;
     dvco_cipher_ctx_t *ctx_b = NULL;
     dvco_cipher_ctx_t *ctx_c = NULL;
@@ -592,9 +645,384 @@ int main(int argc, char **argv) {
     uint8_t *plaintext_out = NULL;
     size_t   plaintext_out_len = 0u;
 
+    int rc;
+    int result = 1;
+
+    rc = api->create(kv->items, kv->count, &ctx_a);
+    print_rc("create(ctx_a)", rc);
+    if (rc != DVCO_CP_OK || ctx_a == NULL) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+
+    rc = api->create(kv->items, kv->count, &ctx_b);
+    print_rc("create(ctx_b)", rc);
+    if (rc != DVCO_CP_OK || ctx_b == NULL) {
+        print_provider_last_error(api, ctx_b);
+        goto done;
+    }
+
+    rc = api->reset(ctx_a);
+    print_rc("reset(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+
+    rc = api->rotate(ctx_a);
+    print_rc("rotate(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+
+    printf("plaintext: \"%s\" (%zu bytes)\n", plain_text, plain_len);
+
+    rc = alloc_pad_if_needed(info, plain_bytes, plain_len, &encrypt_input, &encrypt_input_len);
+    print_rc("prepare_encrypt_input", rc);
+    if (rc != DVCO_CP_OK) {
+        goto done;
+    }
+
+    dump_hex("encrypt_input", encrypt_input, encrypt_input_len);
+
+    rc = alloc_encrypt_2call(api, ctx_a, encrypt_input, encrypt_input_len, &ciphertext, &ciphertext_len);
+    print_rc("encrypt(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+    dump_hex("ciphertext", ciphertext, ciphertext_len);
+
+    rc = alloc_via_provider_2call(api->serialize_shareable, ctx_a, &shareable, &shareable_len);
+    print_rc("serialize_shareable(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+    dump_hex("shareable", shareable, shareable_len);
+
+    rc = api->deserialize_shareable(ctx_b, shareable, shareable_len);
+    print_rc("deserialize_shareable(ctx_b)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_b);
+        goto done;
+    }
+
+    rc = api->compare_shareable(ctx_b, shareable, shareable_len);
+    print_cmp_rc("compare_shareable(ctx_b, shareable)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_shareable failed after deserialize_shareable\n");
+        print_provider_last_error(api, ctx_b);
+        goto done;
+    }
+
+    rc = api->compare_shareable(ctx_a, shareable, shareable_len);
+    print_cmp_rc("compare_shareable(ctx_a, shareable)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_shareable failed against original ctx_a\n");
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+
+    rc = alloc_via_provider_2call(api->serialize_private, ctx_a, &private_blob, &private_blob_len);
+    print_rc("serialize_private(ctx_a)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+    dump_hex("private", private_blob, private_blob_len);
+
+    rc = api->create(kv->items, kv->count, &ctx_c);
+    print_rc("create(ctx_c)", rc);
+    if (rc != DVCO_CP_OK || ctx_c == NULL) {
+        print_provider_last_error(api, ctx_c);
+        goto done;
+    }
+
+    rc = api->deserialize_private(ctx_c, private_blob, private_blob_len);
+    print_rc("deserialize_private(ctx_c)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_c);
+        goto done;
+    }
+
+    rc = api->compare_private(ctx_c, private_blob, private_blob_len);
+    print_cmp_rc("compare_private(ctx_c, private_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_private failed after deserialize_private\n");
+        print_provider_last_error(api, ctx_c);
+        goto done;
+    }
+
+    rc = api->compare_private(ctx_a, private_blob, private_blob_len);
+    print_cmp_rc("compare_private(ctx_a, private_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_private failed against original ctx_a\n");
+        print_provider_last_error(api, ctx_a);
+        goto done;
+    }
+
+    rc = alloc_decrypt_2call(api, ctx_b, ciphertext, ciphertext_len, &plaintext_out, &plaintext_out_len);
+    print_rc("decrypt(ctx_b)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_b);
+        goto done;
+    }
+
+    dump_hex("decrypted_raw", plaintext_out, plaintext_out_len);
+
+    rc = alloc_unpad_if_needed(info, plaintext_out, plaintext_out_len, &plaintext_cmp, &plaintext_cmp_len);
+    print_rc("normalize_decrypted", rc);
+    if (rc != DVCO_CP_OK) {
+        goto done;
+    }
+
+    printf("decrypted: \"%.*s\" (%zu bytes)\n",
+           (int)plaintext_cmp_len,
+           (const char *)plaintext_cmp,
+           plaintext_cmp_len);
+
+    if (plaintext_cmp_len != plain_len || memcmp(plaintext_cmp, plain_bytes, plain_len) != 0) {
+        fprintf(stderr, "Roundtrip mismatch: decrypted payload differs from input\n");
+        goto done;
+    }
+
+    result = 0;
+
+done:
+    secure_zero_free(encrypt_input, encrypt_input_len);
+    secure_zero_free(plaintext_cmp, plaintext_cmp_len);
+
+    free(shareable);
+    free(private_blob);
+    free(ciphertext);
+    free(plaintext_out);
+
+    if (api != NULL && ctx_a != NULL && api->destroy != NULL) {
+        api->destroy(ctx_a);
+    }
+    if (api != NULL && ctx_b != NULL && api->destroy != NULL) {
+        api->destroy(ctx_b);
+    }
+    if (api != NULL && ctx_c != NULL && api->destroy != NULL) {
+        api->destroy(ctx_c);
+    }
+
+    return result;
+}
+
+static int run_asymmetric_provider_test(
+    const dvco_cipher_provider_api_t *api,
+    const dvco_cipher_provider_info_t *info,
+    const kv_list_t *kv,
+    const uint8_t *plain_bytes,
+    size_t plain_len,
+    const char *plain_text
+) {
+    dvco_cipher_ctx_t *ctx_keypair = NULL;
+    dvco_cipher_ctx_t *ctx_pub = NULL;
+    dvco_cipher_ctx_t *ctx_priv = NULL;
+
+    uint8_t *encrypt_input = NULL;
+    size_t   encrypt_input_len = 0u;
+
+    uint8_t *plaintext_cmp = NULL;
+    size_t   plaintext_cmp_len = 0u;
+
+    uint8_t *public_blob = NULL;
+    size_t   public_blob_len = 0u;
+
+    uint8_t *private_blob = NULL;
+    size_t   private_blob_len = 0u;
+
+    uint8_t *ciphertext = NULL;
+    size_t   ciphertext_len = 0u;
+
+    uint8_t *plaintext_out = NULL;
+    size_t   plaintext_out_len = 0u;
+
+    int rc;
+    int result = 1;
+
+    rc = api->create(kv->items, kv->count, &ctx_keypair);
+    print_rc("create(ctx_keypair)", rc);
+    if (rc != DVCO_CP_OK || ctx_keypair == NULL) {
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+
+    rc = api->reset(ctx_keypair);
+    print_rc("reset(ctx_keypair)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+
+    rc = api->rotate(ctx_keypair);
+    print_rc("rotate(ctx_keypair)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+
+    rc = alloc_via_provider_2call(api->serialize_shareable, ctx_keypair, &public_blob, &public_blob_len);
+    print_rc("serialize_shareable(ctx_keypair)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+    dump_hex("public/shareable", public_blob, public_blob_len);
+
+    rc = alloc_via_provider_2call(api->serialize_private, ctx_keypair, &private_blob, &private_blob_len);
+    print_rc("serialize_private(ctx_keypair)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+    dump_hex("private", private_blob, private_blob_len);
+
+    rc = api->create(kv->items, kv->count, &ctx_pub);
+    print_rc("create(ctx_pub)", rc);
+    if (rc != DVCO_CP_OK || ctx_pub == NULL) {
+        print_provider_last_error(api, ctx_pub);
+        goto done;
+    }
+
+    rc = api->deserialize_shareable(ctx_pub, public_blob, public_blob_len);
+    print_rc("deserialize_shareable(ctx_pub)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_pub);
+        goto done;
+    }
+
+    rc = api->compare_shareable(ctx_pub, public_blob, public_blob_len);
+    print_cmp_rc("compare_shareable(ctx_pub, public_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_shareable failed after deserialize_shareable\n");
+        print_provider_last_error(api, ctx_pub);
+        goto done;
+    }
+
+    rc = api->compare_shareable(ctx_keypair, public_blob, public_blob_len);
+    print_cmp_rc("compare_shareable(ctx_keypair, public_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_shareable failed against original ctx_keypair\n");
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+
+    rc = api->create(kv->items, kv->count, &ctx_priv);
+    print_rc("create(ctx_priv)", rc);
+    if (rc != DVCO_CP_OK || ctx_priv == NULL) {
+        print_provider_last_error(api, ctx_priv);
+        goto done;
+    }
+
+    rc = api->deserialize_private(ctx_priv, private_blob, private_blob_len);
+    print_rc("deserialize_private(ctx_priv)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_priv);
+        goto done;
+    }
+
+    rc = api->compare_private(ctx_priv, private_blob, private_blob_len);
+    print_cmp_rc("compare_private(ctx_priv, private_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_private failed after deserialize_private\n");
+        print_provider_last_error(api, ctx_priv);
+        goto done;
+    }
+
+    rc = api->compare_private(ctx_keypair, private_blob, private_blob_len);
+    print_cmp_rc("compare_private(ctx_keypair, private_blob)", rc);
+    if (rc != DVCO_CP_OK) {
+        fprintf(stderr, "compare_private failed against original ctx_keypair\n");
+        print_provider_last_error(api, ctx_keypair);
+        goto done;
+    }
+
+    printf("plaintext: \"%s\" (%zu bytes)\n", plain_text, plain_len);
+
+    rc = alloc_pad_if_needed(info, plain_bytes, plain_len, &encrypt_input, &encrypt_input_len);
+    print_rc("prepare_encrypt_input", rc);
+    if (rc != DVCO_CP_OK) {
+        goto done;
+    }
+
+    dump_hex("encrypt_input", encrypt_input, encrypt_input_len);
+
+    rc = alloc_encrypt_2call(api, ctx_pub, encrypt_input, encrypt_input_len, &ciphertext, &ciphertext_len);
+    print_rc("encrypt(ctx_pub)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_pub);
+        goto done;
+    }
+    dump_hex("ciphertext", ciphertext, ciphertext_len);
+
+    rc = alloc_decrypt_2call(api, ctx_priv, ciphertext, ciphertext_len, &plaintext_out, &plaintext_out_len);
+    print_rc("decrypt(ctx_priv)", rc);
+    if (rc != DVCO_CP_OK) {
+        print_provider_last_error(api, ctx_priv);
+        goto done;
+    }
+
+    dump_hex("decrypted_raw", plaintext_out, plaintext_out_len);
+
+    rc = alloc_unpad_if_needed(info, plaintext_out, plaintext_out_len, &plaintext_cmp, &plaintext_cmp_len);
+    print_rc("normalize_decrypted", rc);
+    if (rc != DVCO_CP_OK) {
+        goto done;
+    }
+
+    printf("decrypted: \"%.*s\" (%zu bytes)\n",
+           (int)plaintext_cmp_len,
+           (const char *)plaintext_cmp,
+           plaintext_cmp_len);
+
+    if (plaintext_cmp_len != plain_len || memcmp(plaintext_cmp, plain_bytes, plain_len) != 0) {
+        fprintf(stderr, "Roundtrip mismatch: decrypted payload differs from input\n");
+        goto done;
+    }
+
+    result = 0;
+
+done:
+    secure_zero_free(encrypt_input, encrypt_input_len);
+    secure_zero_free(plaintext_cmp, plaintext_cmp_len);
+
+    free(public_blob);
+    free(private_blob);
+    free(ciphertext);
+    free(plaintext_out);
+
+    if (api != NULL && ctx_keypair != NULL && api->destroy != NULL) {
+        api->destroy(ctx_keypair);
+    }
+    if (api != NULL && ctx_pub != NULL && api->destroy != NULL) {
+        api->destroy(ctx_pub);
+    }
+    if (api != NULL && ctx_priv != NULL && api->destroy != NULL) {
+        api->destroy(ctx_priv);
+    }
+
+    return result;
+}
+
+int main(int argc, char **argv) {
+    app_cfg_t cfg;
+    kv_list_t kv = {0};
+
+    void *dl_handle = NULL;
+    dvco_cipher_provider_get_api_fn get_api_fn = NULL;
+    const dvco_cipher_provider_api_t *api = NULL;
+    dvco_cipher_provider_info_t info;
+
     const char *plain_text = NULL;
     const uint8_t *plain_bytes = NULL;
     size_t plain_len = 0u;
+    uint16_t category;
+    uint16_t variant;
 
     int rc;
     int exit_code = 1;
@@ -662,176 +1090,42 @@ int main(int argc, char **argv) {
         goto done;
     }
 
+    category = get_main_category(&info);
+    variant = get_category_variant(&info);
+
     printf("Provider info:\n");
-    printf("  abi      : %u.%u\n", info.abi_major, info.abi_minor);
-    printf("  name     : %s\n", info.provider_name ? info.provider_name : "(null)");
-    printf("  version  : %s\n", info.provider_version ? info.provider_version : "(null)");
-    printf("  desc     : %s\n", info.provider_desc ? info.provider_desc : "(null)");
-    printf("  meta cid : %u\n", (unsigned)info.cid);
-    printf("  pad_apply: %s\n", info.pad_apply ? "true" : "false");
-    printf("  pad_block_size: %zu\n", info.pad_block_size);
+    printf("  abi              : %u.%u\n", info.abi_major, info.abi_minor);
+    printf("  name             : %s\n", info.provider_name ? info.provider_name : "(null)");
+    printf("  version          : %s\n", info.provider_version ? info.provider_version : "(null)");
+    printf("  desc             : %s\n", info.provider_desc ? info.provider_desc : "(null)");
+    printf("  meta cid         : %u\n", (unsigned)info.cid);
+    printf("  pad_apply        : %s\n", info.pad_apply ? "true" : "false");
+    printf("  pad_block_size   : %zu\n", info.pad_block_size);
+    printf("  category         : %s (%u)\n", category_name(category), (unsigned)category);
+    printf("  category variant : %u\n", (unsigned)variant);
+    printf("  category raw     : 0x%04x\n", (unsigned)info.category_flags);
 
-    rc = api->create(kv.items, kv.count, &ctx_a);
-    print_rc("create(ctx_a)", rc);
-    if (rc != DVCO_CP_OK || ctx_a == NULL) {
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-
-    rc = api->create(kv.items, kv.count, &ctx_b);
-    print_rc("create(ctx_b)", rc);
-    if (rc != DVCO_CP_OK || ctx_b == NULL) {
-        print_provider_last_error(api, ctx_b);
-        goto done;
-    }
-
-    rc = api->reset(ctx_a);
-    print_rc("reset(ctx_a)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-
-    rc = api->rotate(ctx_a);
-    print_rc("rotate(ctx_a)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-
-    printf("plaintext: \"%s\" (%zu bytes)\n", plain_text, plain_len);
-
-    rc = alloc_pad_if_needed(&info, plain_bytes, plain_len, &encrypt_input, &encrypt_input_len);
-    print_rc("prepare_encrypt_input", rc);
+    rc = validate_provider_category(&info);
     if (rc != DVCO_CP_OK) {
         goto done;
     }
 
-    dump_hex("encrypt_input", encrypt_input, encrypt_input_len);
-
-    rc = alloc_encrypt_2call(api, ctx_a, encrypt_input, encrypt_input_len, &ciphertext, &ciphertext_len);
-    print_rc("encrypt(ctx_a)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-    dump_hex("ciphertext", ciphertext, ciphertext_len);
-
-    rc = alloc_via_provider_2call(api->serialize_shareable, ctx_a, &shareable, &shareable_len);
-    print_rc("serialize_shareable(ctx_a)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-    dump_hex("shareable", shareable, shareable_len);
-
-    rc = api->deserialize_shareable(ctx_b, shareable, shareable_len);
-    print_rc("deserialize_shareable(ctx_b)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_b);
+    if (category == CRAG_PROVIDER_CATEGORY_SYMMETRIC) {
+        printf("test path        : symmetric\n");
+        exit_code = run_symmetric_provider_test(api, &info, &kv, plain_bytes, plain_len, plain_text);
+    } else if (category == CRAG_PROVIDER_CATEGORY_ASYMMETRIC) {
+        printf("test path        : asymmetric\n");
+        exit_code = run_asymmetric_provider_test(api, &info, &kv, plain_bytes, plain_len, plain_text);
+    } else {
+        fprintf(stderr, "Unsupported provider category: %u\n", (unsigned)category);
         goto done;
     }
 
-    rc = api->compare_shareable(ctx_b, shareable, shareable_len);
-    print_cmp_rc("compare_shareable(ctx_b, shareable)", rc);
-    if (rc != DVCO_CP_OK) {
-        fprintf(stderr, "compare_shareable failed after deserialize_shareable\n");
-        print_provider_last_error(api, ctx_b);
-        goto done;
+    if (exit_code == 0) {
+        printf("[PASS] Provider interface exercised successfully.\n");
     }
-
-    rc = api->compare_shareable(ctx_a, shareable, shareable_len);
-    print_cmp_rc("compare_shareable(ctx_a, shareable)", rc);
-    if (rc != DVCO_CP_OK) {
-        fprintf(stderr, "compare_shareable failed against original ctx_a\n");
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-
-    rc = alloc_via_provider_2call(api->serialize_private, ctx_a, &private_blob, &private_blob_len);
-    print_rc("serialize_private(ctx_a)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-    dump_hex("private", private_blob, private_blob_len);
-
-    rc = api->create(kv.items, kv.count, &ctx_c);
-    print_rc("create(ctx_c)", rc);
-    if (rc != DVCO_CP_OK || ctx_c == NULL) {
-        print_provider_last_error(api, ctx_c);
-        goto done;
-    }
-
-    rc = api->deserialize_private(ctx_c, private_blob, private_blob_len);
-    print_rc("deserialize_private(ctx_c)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_c);
-        goto done;
-    }
-
-    rc = api->compare_private(ctx_c, private_blob, private_blob_len);
-    print_cmp_rc("compare_private(ctx_c, private_blob)", rc);
-    if (rc != DVCO_CP_OK) {
-        fprintf(stderr, "compare_private failed after deserialize_private\n");
-        print_provider_last_error(api, ctx_c);
-        goto done;
-    }
-
-    rc = api->compare_private(ctx_a, private_blob, private_blob_len);
-    print_cmp_rc("compare_private(ctx_a, private_blob)", rc);
-    if (rc != DVCO_CP_OK) {
-        fprintf(stderr, "compare_private failed against original ctx_a\n");
-        print_provider_last_error(api, ctx_a);
-        goto done;
-    }
-
-    rc = alloc_decrypt_2call(api, ctx_b, ciphertext, ciphertext_len, &plaintext_out, &plaintext_out_len);
-    print_rc("decrypt(ctx_b)", rc);
-    if (rc != DVCO_CP_OK) {
-        print_provider_last_error(api, ctx_b);
-        goto done;
-    }
-
-    dump_hex("decrypted_raw", plaintext_out, plaintext_out_len);
-
-    rc = alloc_unpad_if_needed(&info, plaintext_out, plaintext_out_len, &plaintext_cmp, &plaintext_cmp_len);
-    print_rc("normalize_decrypted", rc);
-    if (rc != DVCO_CP_OK) {
-        goto done;
-    }
-
-    printf("decrypted: \"%.*s\" (%zu bytes)\n",
-           (int)plaintext_cmp_len,
-           (const char *)plaintext_cmp,
-           plaintext_cmp_len);
-
-    if (plaintext_cmp_len != plain_len || memcmp(plaintext_cmp, plain_bytes, plain_len) != 0) {
-        fprintf(stderr, "Roundtrip mismatch: decrypted payload differs from input\n");
-        goto done;
-    }
-
-    printf("[PASS] Provider interface exercised successfully.\n");
-    exit_code = 0;
 
 done:
-    secure_zero_free(encrypt_input, encrypt_input_len);
-    secure_zero_free(plaintext_cmp, plaintext_cmp_len);
-
-    free(shareable);
-    free(private_blob);
-    free(ciphertext);
-    free(plaintext_out);
-
-    if (api != NULL && ctx_a != NULL && api->destroy != NULL) {
-        api->destroy(ctx_a);
-    }
-    if (api != NULL && ctx_b != NULL && api->destroy != NULL) {
-        api->destroy(ctx_b);
-    }
-    if (api != NULL && ctx_c != NULL && api->destroy != NULL) {
-        api->destroy(ctx_c);
-    }
     if (dl_handle != NULL) {
         dlclose(dl_handle);
     }
@@ -839,4 +1133,3 @@ done:
     free_kv_list(&kv);
     return exit_code;
 }
-

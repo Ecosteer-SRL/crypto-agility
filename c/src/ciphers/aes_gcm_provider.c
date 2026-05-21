@@ -308,14 +308,15 @@ static int aesgcm_get_info(dvco_cipher_provider_info_t *out_info)
 
     memset(out_info, 0, sizeof(*out_info));
 
-    out_info->abi_major        = DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR;
-    out_info->abi_minor        = DVCO_CIPHER_PROVIDER_API_VERSION_MINOR;
-    out_info->provider_name    = DVCO_AESGCM_PROVIDER_NAME;
-    out_info->provider_version = DVCO_AESGCM_PROVIDER_VERSION;
-    out_info->provider_desc    = DVCO_AESGCM_PROVIDER_DESC;
-    out_info->cid              = DVCO_CIPHER_ID;
-    out_info->pad_apply        = false;
-    out_info->pad_block_size   = DVCO_AESGCM_BLOCK_SIZE;
+    out_info->abi_major         = DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR;
+    out_info->abi_minor         = DVCO_CIPHER_PROVIDER_API_VERSION_MINOR;
+    out_info->provider_name     = DVCO_AESGCM_PROVIDER_NAME;
+    out_info->provider_version  = DVCO_AESGCM_PROVIDER_VERSION;
+    out_info->provider_desc     = DVCO_AESGCM_PROVIDER_DESC;
+    out_info->cid               = DVCO_CIPHER_ID;
+    out_info->pad_apply         = false;
+    out_info->pad_block_size    = DVCO_AESGCM_BLOCK_SIZE;
+    out_info->category_flags    = CRAG_PROVIDER_CATEGORY_SYMMETRIC;
 
     return DVCO_CP_OK;
 }
