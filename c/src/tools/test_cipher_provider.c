@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
 
 /*
  * test_cipher_provider.c
@@ -92,7 +92,8 @@ typedef struct kv_list_s {
 
 
 
-static void secure_zero_free(uint8_t *p, size_t n) {
+static void secure_zero_free(uint8_t *p, size_t n) 
+{
     if (p != NULL) {
         if (n > 0u) {
             memset(p, 0, n);
@@ -101,13 +102,15 @@ static void secure_zero_free(uint8_t *p, size_t n) {
     }
 }
 
-static int alloc_pad_if_needed(
+static int alloc_pad_if_needed
+(
     const dvco_cipher_provider_info_t *info,
     const uint8_t *plain,
     size_t plain_len,
     uint8_t **enc_in,
     size_t *enc_in_len
-) {
+) 
+{
     int rc;
     uint8_t *buf = NULL;
     size_t block_size;
@@ -130,9 +133,11 @@ static int alloc_pad_if_needed(
         if (buf == NULL) {
             return DVCO_CP_ERR_ALLOC;
         }
+
         if (plain_len > 0u) {
             memcpy(buf, plain, plain_len);
         }
+
         *enc_in = buf;
         *enc_in_len = plain_len;
         return DVCO_CP_OK;
@@ -144,8 +149,9 @@ static int alloc_pad_if_needed(
     }
 
     pad_len = block_size - (plain_len % block_size);
-    if (pad_len == 0u) {
-        pad_len = block_size;
+
+    if (plain_len > (SIZE_MAX - pad_len)) {
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
     out_len = plain_len + pad_len;
@@ -167,13 +173,15 @@ static int alloc_pad_if_needed(
 }
 
 
-static int alloc_unpad_if_needed(
+static int alloc_unpad_if_needed
+(
     const dvco_cipher_provider_info_t *info,
     const uint8_t *plain_in,
     size_t plain_in_len,
     uint8_t **plain_out,
     size_t *plain_out_len
-) {
+) 
+{
     int rc;
     uint8_t *buf = NULL;
     size_t len;
@@ -184,6 +192,14 @@ static int alloc_unpad_if_needed(
 
     *plain_out = NULL;
     *plain_out_len = 0u;
+
+    if ((plain_in_len > 0u) && (plain_in == NULL)) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (info->pad_apply && info->pad_block_size == 0u) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
 
     buf = (uint8_t *)malloc(plain_in_len > 0u ? plain_in_len : 1u);
     if (buf == NULL) {
@@ -209,7 +225,11 @@ static int alloc_unpad_if_needed(
     return DVCO_CP_OK;
 }
 
-static void print_cmp_rc(const char *what, int rc) {
+
+
+
+static void print_cmp_rc(const char *what, int rc) 
+{
     if (rc == 0) {
         printf("%s: MATCH\n", what);
     } else if (rc > 0) {
@@ -220,7 +240,8 @@ static void print_cmp_rc(const char *what, int rc) {
 }
 
 
-static void usage(const char *prog) {
+static void usage(const char *prog) 
+{
     fprintf(stderr,
         "Usage:\n"
         "  %s --lib <provider.so> [--confstring \"k1=v1;k2=v2;...\"] [--plain <text>]\n"
@@ -233,7 +254,8 @@ static void usage(const char *prog) {
     );
 }
 
-static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
+static int parse_args(int argc, char **argv, app_cfg_t *cfg) 
+{
     int i;
 
     if (cfg == NULL) {
@@ -270,7 +292,8 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
     return 0;
 }
 
-static char *trim_inplace(char *s) {
+static char *trim_inplace(char *s) 
+{
     char *end;
 
     if (s == NULL) {
@@ -294,7 +317,8 @@ static char *trim_inplace(char *s) {
     return s;
 }
 
-static void free_kv_list(kv_list_t *kv) {
+static void free_kv_list(kv_list_t *kv) 
+{
     if (kv == NULL) {
         return;
     }
@@ -307,7 +331,8 @@ static void free_kv_list(kv_list_t *kv) {
     kv->count = 0u;
 }
 
-static int parse_confstring(const char *confstring, kv_list_t *out_kv) {
+static int parse_confstring(const char *confstring, kv_list_t *out_kv) 
+{
     size_t i;
     size_t pairs_max = 0u;
     char *cursor;
@@ -387,7 +412,8 @@ static int parse_confstring(const char *confstring, kv_list_t *out_kv) {
     return DVCO_CP_OK;
 }
 
-static void dump_hex(const char *label, const uint8_t *p, size_t n) {
+static void dump_hex(const char *label, const uint8_t *p, size_t n) 
+{
     size_t i;
 
     printf("%s (%zu bytes): ", label, n);
@@ -400,11 +426,13 @@ static void dump_hex(const char *label, const uint8_t *p, size_t n) {
     printf("\n");
 }
 
-static void print_rc(const char *what, int rc) {
+static void print_rc(const char *what, int rc) 
+{
     printf("%s: rc=%d\n", what, rc);
 }
 
-static void print_provider_last_error(const dvco_cipher_provider_api_t *api, dvco_cipher_ctx_t *ctx) {
+static void print_provider_last_error(const dvco_cipher_provider_api_t *api, dvco_cipher_ctx_t *ctx) 
+{
     const char *s;
 
     if (api == NULL || api->last_error == NULL) {
@@ -417,12 +445,14 @@ static void print_provider_last_error(const dvco_cipher_provider_api_t *api, dvc
     }
 }
 
-static int alloc_via_provider_2call(
+static int alloc_via_provider_2call
+(
     int (*fn)(dvco_cipher_ctx_t *, dvco_buf_t *),
     dvco_cipher_ctx_t *ctx,
     uint8_t **out_buf,
     size_t *out_len
-) {
+) 
+{
     dvco_buf_t b;
     int rc;
 
@@ -463,14 +493,16 @@ static int alloc_via_provider_2call(
     return DVCO_CP_OK;
 }
 
-static int alloc_encrypt_2call(
+static int alloc_encrypt_2call
+(
     const dvco_cipher_provider_api_t *api,
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     uint8_t **out_buf,
     size_t *out_len
-) {
+) 
+{
     dvco_buf_t b;
     int rc;
 
@@ -511,14 +543,16 @@ static int alloc_encrypt_2call(
     return DVCO_CP_OK;
 }
 
-static int alloc_decrypt_2call(
+static int alloc_decrypt_2call
+(
     const dvco_cipher_provider_api_t *api,
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     uint8_t **out_buf,
     size_t *out_len
-) {
+) 
+{
     dvco_buf_t b;
     int rc;
 
@@ -561,21 +595,24 @@ static int alloc_decrypt_2call(
 
 
 
-static uint16_t get_main_category(const dvco_cipher_provider_info_t *info) {
+static uint16_t get_main_category(const dvco_cipher_provider_info_t *info) 
+{
     if (info == NULL) {
         return CRAG_PROVIDER_CATEGORY_UNSPECIFIED;
     }
     return (uint16_t)(info->category_flags & CRAG_PROVIDER_CATEGORY_MASK);
 }
 
-static uint16_t get_category_variant(const dvco_cipher_provider_info_t *info) {
+static uint16_t get_category_variant(const dvco_cipher_provider_info_t *info) 
+{
     if (info == NULL) {
         return 0u;
     }
     return (uint16_t)((info->category_flags & CRAG_PROVIDER_CATEGORY_VARIANT_MASK) >> 8);
 }
 
-static const char *category_name(uint16_t category) {
+static const char *category_name(uint16_t category) 
+{
     switch (category) {
         case CRAG_PROVIDER_CATEGORY_SYMMETRIC:
             return "symmetric";
@@ -588,7 +625,8 @@ static const char *category_name(uint16_t category) {
     }
 }
 
-static int validate_provider_category(const dvco_cipher_provider_info_t *info) {
+static int validate_provider_category(const dvco_cipher_provider_info_t *info) 
+{
     uint16_t category;
     uint16_t variant;
 
@@ -615,14 +653,16 @@ static int validate_provider_category(const dvco_cipher_provider_info_t *info) {
     return DVCO_CP_OK;
 }
 
-static int run_symmetric_provider_test(
+static int run_symmetric_provider_test
+(
     const dvco_cipher_provider_api_t *api,
     const dvco_cipher_provider_info_t *info,
     const kv_list_t *kv,
     const uint8_t *plain_bytes,
     size_t plain_len,
     const char *plain_text
-) {
+) 
+{
     dvco_cipher_ctx_t *ctx_a = NULL;
     dvco_cipher_ctx_t *ctx_b = NULL;
     dvco_cipher_ctx_t *ctx_c = NULL;
@@ -812,14 +852,16 @@ done:
     return result;
 }
 
-static int run_asymmetric_provider_test(
+static int run_asymmetric_provider_test
+(
     const dvco_cipher_provider_api_t *api,
     const dvco_cipher_provider_info_t *info,
     const kv_list_t *kv,
     const uint8_t *plain_bytes,
     size_t plain_len,
     const char *plain_text
-) {
+) 
+{
     dvco_cipher_ctx_t *ctx_keypair = NULL;
     dvco_cipher_ctx_t *ctx_pub = NULL;
     dvco_cipher_ctx_t *ctx_priv = NULL;
@@ -1009,7 +1051,8 @@ done:
     return result;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) 
+{
     app_cfg_t cfg;
     kv_list_t kv = {0};
 
