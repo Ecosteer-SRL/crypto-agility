@@ -4,9 +4,8 @@
 // ver: 1.0
 
 // conf:
-//   keybits=128|192|256          optional, default=256
+//   keybits=32..448              optional, default=128, must be a multiple of 8
 //   key=0x...                    optional, fixed initial key, must match keybits
-
 
 
 #include "ciphers/cipher_provider.h"
