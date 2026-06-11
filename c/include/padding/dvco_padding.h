@@ -11,6 +11,12 @@
 #include <string.h>
 
 
+#define DVCO_PAD_OK              0
+#define DVCO_PAD_ERRINVALIDARG   1
+#define DVCO_PAD_ERRBUFTOOSMALL  2
+#define DVCO_PAD_INVALID         3
+
+
 #ifndef NEW_REL
 #define NEW_REL
 #endif

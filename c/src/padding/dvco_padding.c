@@ -11,18 +11,7 @@
 #include <string.h>
 
 
-#define DVCO_PAD_OK              0
-#define DVCO_PAD_ERRINVALIDARG   1
-#define DVCO_PAD_ERRBUFTOOSMALL  2
-#define DVCO_PAD_INVALID         3
 
-/*
-  Return codes:
-    0   success
-   -1   invalid argument
-   -2   output buffer too small
-   -3   invalid padding (unpad)
-*/
 
 int dvco_pkcs7_pad
 (
