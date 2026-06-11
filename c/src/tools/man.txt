@@ -184,3 +184,131 @@ Example:
   --size 1024 \
   --iters 100000 \
   --decrypt-mode reuse
+
+====================================================
+probe_cipher_provider
+====================================================
+
+Purpose:
+probe_cipher_provider is a standalone diagnostic tool for cipher providers.
+Its objective is not to replace test_cipher_provider and not to replace
+bench_cipher_provider.
+Instead, it is used to produce reproducible provider evidence useful when
+debugging, comparing, or porting cipher providers across environments such as
+Linux and MCU firmware.
+
+The tool loads a provider shared library at runtime, resolves the provider API,
+creates provider contexts through the framework ABI, prepares a controlled input,
+runs the provider operation path, and prints the relevant material and results in
+a form that can be compared manually or captured in logs.
+It is especially useful when validating whether two implementations of the same
+provider produce compatible shareable material, ciphertext framing, padding
+behavior, and decrypted plaintext.
+
+probe_cipher_provider is intentionally generic.
+The name does not imply that the provider uses an IV, nonce, counter, or other
+cipher vector.
+A provider without IV/nonce/counter can still be probed.
+Likewise, the tool can be used with providers that support deterministic test
+vectors, providers that generate fresh material through rotate(), or providers
+that only need to print reproducible evidence for inspection.
+
+Diagnostic Logic:
+The program probes a provider by executing a focused provider operation and
+printing the resulting evidence.
+The output is intended to answer the question:
+
+  What exactly does this provider produce with this configuration and input?
+
+The main sequence is:
+ 1) Parse command-line arguments and confstring.
+ 2) Load the provider .so with dlopen().
+ 3) Resolve dvco_cipher_provider_get_api with dlsym().
+ 4) Call dvco_cipher_provider_get_api() to obtain the provider vtable.
+ 5) Check that the required vtable functions are present for the selected
+    provider category.
+ 6) Call get_info() and print provider metadata, including category_flags.
+ 7) Call create() to create an encryption/provider context.
+ 8) Call rotate() unless the selected provider configuration already supplies
+    deterministic material.
+ 9) Prepare the plaintext input.
+10) Apply caller-side padding if required by provider metadata.
+11) Call encrypt() and print the ciphertext.
+12) Call serialize_shareable() and print the shareable material.
+13) Create a second provider context for decrypt-side validation.
+14) Call deserialize_shareable() on the second context.
+15) Call decrypt() on the ciphertext.
+16) Normalize the decrypted output when padding removal is required.
+17) Print the decrypted plaintext and compare it with the original input.
+18) Print all relevant diagnostic evidence in hex and/or text form.
+19) Destroy all contexts and close the provider library.
+
+Typical evidence printed by the tool includes:
+  provider ABI
+  provider name
+  provider version
+  provider description
+  provider cid
+  category_flags
+  pad_apply
+  pad_block_size
+  confstring
+  plaintext
+  encryption input
+  ciphertext
+  shareable material
+  decrypted raw output
+  normalized decrypted output
+  final roundtrip result
+
+Command:
+./probe_cipher_provider \
+  --lib <provider_shared_library> \
+  [--confstring "<provider_configuration>"] \
+  [--plain "<plaintext>"]
+
+Arguments:
+--lib <path>
+  Path to the runtime-loadable cipher-provider shared library to be probed.
+--cipher <path>
+  Alias for --lib, if supported by the build of the tool.
+--confstring "<string>"
+  Optional provider-specific configuration string.
+  The string is parsed by the tool and passed to the provider create() function.
+  If omitted, an empty configuration string is used.
+--plain "<text>"
+  Optional plaintext used for the diagnostic provider operation.
+  If omitted, the default plaintext is "hello dvco".
+--help
+-h
+  Print usage information.
+
+Example:
+../../build/debug/bin/probe_cipher_provider \
+  --lib ../../build/debug/lib/libblowfish_ecb_provider.so \
+  --confstring "" \
+  --plain "hello dvco"
+
+Intended Usage:
+Use probe_cipher_provider when the objective is to inspect provider behavior,
+not to run a formal compliance test and not to measure throughput.
+
+Typical use cases are:
+  compare Linux and MCU provider output
+  verify shareable serialization format
+  verify ciphertext framing
+  verify padding behavior
+  verify deterministic fixed-key or fixed-IV configurations
+  capture evidence before involving DVCO publisher/subscriber logic
+  capture evidence before involving MQTT, HTTPS, proxy, or rotation logic
+
+Relationship With Other Tools:
+test_cipher_provider verifies that the provider satisfies the framework contract.
+bench_cipher_provider measures provider performance.
+probe_cipher_provider prints reproducible diagnostic evidence.
+
+In short:
+  test  = is the provider contract correct?
+  bench = how fast is the provider?
+  probe = what exactly does the provider produce?
+
