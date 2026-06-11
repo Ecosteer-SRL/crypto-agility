@@ -62,6 +62,7 @@ LDLIBS_RL_TOOL                  := -ldl
 
 APPS := \
 	test_cipher_provider \
+	probe_cipher_provider \
 	bench_cipher_provider
 
 LIBS := \
@@ -78,6 +79,11 @@ LIBS := \
 
 OBJS_test_cipher_provider := \
 	$(OBJDIR)/test_cipher_provider.o \
+	$(OBJDIR)/cipher_provider.o \
+	$(OBJDIR)/dvco_padding.o
+
+OBJS_probe_cipher_provider := \
+	$(OBJDIR)/probe_cipher_provider.o \
 	$(OBJDIR)/cipher_provider.o \
 	$(OBJDIR)/dvco_padding.o
 
@@ -120,6 +126,7 @@ OBJS_librsa_oaep_aes_gcm_provider := \
 
 ALL_OBJS := \
 	$(OBJS_test_cipher_provider) \
+	$(OBJS_probe_cipher_provider) \
 	$(OBJS_bench_cipher_provider) \
 	$(OBJS_libaes_cbc_provider) \
 	$(OBJS_libaes_ctr_provider) \
@@ -135,6 +142,7 @@ ALL_OBJS := \
 ALL_DEPS := $(ALL_OBJS:.o=.d)
 
 BIN_test_cipher_provider := $(BINDIR)/test_cipher_provider
+BIN_probe_cipher_provider := $(BINDIR)/probe_cipher_provider
 BIN_bench_cipher_provider := $(BINDIR)/bench_cipher_provider
 
 SO_libaes_cbc_provider := $(LIBDIR)/libaes_cbc_provider.so
@@ -150,6 +158,7 @@ SO_librsa_oaep_aes_gcm_provider := $(LIBDIR)/librsa_oaep_aes_gcm_provider.so
 
 ALL_BINS := \
 	$(BIN_test_cipher_provider) \
+	$(BIN_probe_cipher_provider) \
 	$(BIN_bench_cipher_provider)
 
 ALL_LIBS := \
@@ -284,6 +293,10 @@ $(SO_librsa_oaep_aes_gcm_provider): $(OBJS_librsa_oaep_aes_gcm_provider)
 	$(CC) -shared -o $@ $^ $(LDLIBS_RSA_OAEP_AES_GCM_SO)
 
 $(BIN_test_cipher_provider): $(OBJS_test_cipher_provider)
+	@mkdir -p $(@D)
+	$(CC) -o $@ $^ $(LDLIBS_RL_TOOL)
+
+$(BIN_probe_cipher_provider): $(OBJS_probe_cipher_provider)
 	@mkdir -p $(@D)
 	$(CC) -o $@ $^ $(LDLIBS_RL_TOOL)
 
