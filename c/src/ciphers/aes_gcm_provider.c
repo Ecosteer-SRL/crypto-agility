@@ -7,11 +7,14 @@
 // conf:
 //   keybits=128|192|256          optional, default=256
 //   key=0x...                    optional, fixed initial key, must match keybits
+//   iv=0x...                     optional, fixed 12-byte IV for deterministic tests
 //
 // rules:
 //   - unsupported keys => error
 //   - if key is omitted, rotate() must generate the runtime key
-//   - nonce is generated internally per encrypt()
+//   - if iv is omitted, nonce is generated internally per encrypt()
+//   - if iv is provided, it is used as fixed nonce for deterministic tests only
+//   - iv is local encryption configuration; it is not serialized
 //   - AAD not supported
 
 #include "ciphers/cipher_provider.h"
@@ -48,6 +51,9 @@ typedef struct aesgcm_cipher_ctx_s {
     uint8_t key[32];
     size_t  key_len;       // 16 / 24 / 32 when active
     size_t  pref_key_len;  // desired rotate() output: 16 / 24 / 32
+
+    uint8_t fixed_iv[DVCO_AESGCM_NONCE_LEN];
+    int     has_fixed_iv; // 1 = use fixed IV for deterministic encrypt tests
 
     int     is_active;     // 0 = no usable key yet, 1 = ready
 
@@ -205,6 +211,81 @@ static int aesgcm_parse_hex_key(
     return DVCO_CP_OK;
 }
 
+
+static int aesgcm_hex_nibble(int c, uint8_t *out)
+{
+    if (out == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (c >= '0' && c <= '9') {
+        *out = (uint8_t)(c - '0');
+        return DVCO_CP_OK;
+    }
+
+    if (c >= 'a' && c <= 'f') {
+        *out = (uint8_t)(10 + (c - 'a'));
+        return DVCO_CP_OK;
+    }
+
+    if (c >= 'A' && c <= 'F') {
+        *out = (uint8_t)(10 + (c - 'A'));
+        return DVCO_CP_OK;
+    }
+
+    return DVCO_CP_ERR_PARSE;
+}
+
+static int aesgcm_parse_hex_exact(
+    aesgcm_cipher_ctx_t *ctx,
+    const uint8_t *data,
+    size_t len,
+    uint8_t *out,
+    size_t out_len,
+    const char *what,
+    int err_code_on_parse
+) {
+    size_t i;
+    size_t hex_len;
+
+    if (ctx == NULL || data == NULL || out == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (len < 3u || data[0] != '0' || (data[1] != 'x' && data[1] != 'X')) {
+        aesgcm_set_error(ctx, what != NULL ? what : "invalid hex format: expected 0x-prefixed hex string");
+        return err_code_on_parse;
+    }
+
+    hex_len = len - 2u;
+    if (hex_len != (out_len * 2u)) {
+        aesgcm_set_error(ctx, "invalid fixed IV length: expected 12 bytes");
+        return err_code_on_parse;
+    }
+
+    for (i = 0u; i < out_len; i++) {
+        uint8_t hi;
+        uint8_t lo;
+        int rc;
+
+        rc = aesgcm_hex_nibble((int)data[2u + (i * 2u)], &hi);
+        if (rc != DVCO_CP_OK) {
+            aesgcm_set_error(ctx, "invalid hex digit in fixed IV");
+            return err_code_on_parse;
+        }
+
+        rc = aesgcm_hex_nibble((int)data[2u + (i * 2u) + 1u], &lo);
+        if (rc != DVCO_CP_OK) {
+            aesgcm_set_error(ctx, "invalid hex digit in fixed IV");
+            return err_code_on_parse;
+        }
+
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    return DVCO_CP_OK;
+}
+
 static int aesgcm_load_cfg(
     aesgcm_cipher_ctx_t *ctx,
     const dvco_kv_t *cfg,
@@ -266,6 +347,26 @@ static int aesgcm_load_cfg(
             }
 
             saw_key = 1;
+            continue;
+        }
+
+        if (strcmp(k, "iv") == 0) {
+            int rc;
+
+            rc = aesgcm_parse_hex_exact(
+                ctx,
+                (const uint8_t *)v,
+                strlen(v),
+                ctx->fixed_iv,
+                DVCO_AESGCM_NONCE_LEN,
+                "invalid fixed IV format: expected 0x-prefixed hex string",
+                DVCO_CP_ERR_CONFIG
+            );
+            if (rc != DVCO_CP_OK) {
+                return rc;
+            }
+
+            ctx->has_fixed_iv = 1;
             continue;
         }
 
@@ -339,6 +440,7 @@ static int aesgcm_create(const dvco_kv_t *cfg, size_t cfg_count, dvco_cipher_ctx
     ctx->cid          = DVCO_CIPHER_ID;
     ctx->pref_key_len = DVCO_AESGCM_KEY_LEN_DEFAULT;
     ctx->key_len      = 0u;
+    ctx->has_fixed_iv = 0;
     ctx->is_active    = 0;
     aesgcm_set_error(ctx, NULL);
 
@@ -603,9 +705,13 @@ static int aesgcm_encrypt(
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
-    if (RAND_bytes(nonce, (int)sizeof(nonce)) != 1) {
-        aesgcm_set_error(a, "RAND_bytes failed");
-        return DVCO_CP_ERR_CRYPTO;
+    if (a->has_fixed_iv) {
+        memcpy(nonce, a->fixed_iv, DVCO_AESGCM_NONCE_LEN);
+    } else {
+        if (RAND_bytes(nonce, (int)sizeof(nonce)) != 1) {
+            aesgcm_set_error(a, "RAND_bytes failed");
+            return DVCO_CP_ERR_CRYPTO;
+        }
     }
 
     evp = EVP_CIPHER_CTX_new();

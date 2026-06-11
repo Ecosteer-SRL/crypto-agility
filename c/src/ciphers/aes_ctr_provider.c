@@ -7,11 +7,12 @@
 // conf:
 //   keybits=128|192|256          optional, default=256
 //   key=0x...                    optional, fixed initial key, must match keybits
+//   iv=0x...                     optional, fixed 16-byte IV for deterministic tests
 //
 // rules:
 //   - unsupported keys => error
 //   - if key is omitted, rotate() must generate the runtime key
-//   - IV/nonce is generated internally per encrypt()
+//   - IV/nonce is generated internally per encrypt() unless iv=0x... is configured
 //   - AAD not supported
 
 #include "ciphers/cipher_provider.h"
@@ -49,6 +50,9 @@ typedef struct aesctr_cipher_ctx_s {
     size_t  pref_key_len;  /* desired rotate() output: 16 / 24 / 32 */
 
     int     is_active;     /* 0 = no usable key yet, 1 = ready */
+
+    uint8_t fixed_iv[DVCO_AESCTR_IV_LEN];
+    int     has_fixed_iv; /* 0 = random IV per encrypt, 1 = deterministic test IV */
 
     char    last_err[160];
 } aesctr_cipher_ctx_t;
@@ -204,6 +208,91 @@ static int aesctr_parse_hex_key(
     return DVCO_CP_OK;
 }
 
+static int aesctr_hex_nibble(int c, uint8_t *out)
+{
+    if (out == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (c >= '0' && c <= '9') {
+        *out = (uint8_t)(c - '0');
+        return DVCO_CP_OK;
+    }
+
+    if (c >= 'a' && c <= 'f') {
+        *out = (uint8_t)(10 + (c - 'a'));
+        return DVCO_CP_OK;
+    }
+
+    if (c >= 'A' && c <= 'F') {
+        *out = (uint8_t)(10 + (c - 'A'));
+        return DVCO_CP_OK;
+    }
+
+    return DVCO_CP_ERR_PARSE;
+}
+
+static int aesctr_parse_hex_fixed(
+    aesctr_cipher_ctx_t *ctx,
+    const char *field_name,
+    const uint8_t *data,
+    size_t len,
+    uint8_t *out,
+    size_t out_len,
+    int err_code_on_parse
+) {
+    size_t i;
+    size_t hex_len;
+
+    if (ctx == NULL || data == NULL || out == NULL) {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (len < 3u || data[0] != '0' || (data[1] != 'x' && data[1] != 'X')) {
+        if (field_name != NULL && strcmp(field_name, "iv") == 0) {
+            aesctr_set_error(ctx, "invalid IV format: expected 0x-prefixed hex string");
+        } else {
+            aesctr_set_error(ctx, "invalid hex format: expected 0x-prefixed hex string");
+        }
+        return err_code_on_parse;
+    }
+
+    hex_len = len - 2u;
+    if (hex_len != (out_len * 2u)) {
+        if (field_name != NULL && strcmp(field_name, "iv") == 0) {
+            aesctr_set_error(ctx, "invalid IV length: expected 16 bytes");
+        } else {
+            aesctr_set_error(ctx, "invalid fixed hex length");
+        }
+        return err_code_on_parse;
+    }
+
+    for (i = 0u; i < out_len; i++) {
+        uint8_t hi;
+        uint8_t lo;
+        int c_hi;
+        int c_lo;
+
+        c_hi = (int)data[2u + (i * 2u)];
+        c_lo = (int)data[2u + (i * 2u) + 1u];
+
+        if (aesctr_hex_nibble(c_hi, &hi) != DVCO_CP_OK ||
+            aesctr_hex_nibble(c_lo, &lo) != DVCO_CP_OK) {
+            if (field_name != NULL && strcmp(field_name, "iv") == 0) {
+                aesctr_set_error(ctx, "invalid hex digit in IV");
+            } else {
+                aesctr_set_error(ctx, "invalid hex digit");
+            }
+            return err_code_on_parse;
+        }
+
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    return DVCO_CP_OK;
+}
+
+
 static int aesctr_load_cfg(
     aesctr_cipher_ctx_t *ctx,
     const dvco_kv_t *cfg,
@@ -212,6 +301,7 @@ static int aesctr_load_cfg(
     size_t i;
     int saw_keybits = 0;
     int saw_key = 0;
+    int saw_iv = 0;
 
     if (ctx == NULL) {
         return DVCO_CP_ERR_INVALID_ARG;
@@ -268,6 +358,26 @@ static int aesctr_load_cfg(
             continue;
         }
 
+        if (strcmp(k, "iv") == 0) {
+            int rc;
+
+            rc = aesctr_parse_hex_fixed(
+                ctx,
+                "iv",
+                (const uint8_t *)v,
+                strlen(v),
+                ctx->fixed_iv,
+                DVCO_AESCTR_IV_LEN,
+                DVCO_CP_ERR_CONFIG
+            );
+            if (rc != DVCO_CP_OK) {
+                return rc;
+            }
+
+            saw_iv = 1;
+            continue;
+        }
+
         aesctr_set_error(ctx, "unsupported config key");
         return DVCO_CP_ERR_CONFIG;
     }
@@ -279,6 +389,10 @@ static int aesctr_load_cfg(
     if (!aesctr_key_len_is_valid(ctx->pref_key_len)) {
         aesctr_set_error(ctx, "invalid preferred AES key length");
         return DVCO_CP_ERR_CONFIG;
+    }
+
+    if (saw_iv) {
+        ctx->has_fixed_iv = 1;
     }
 
     if (saw_key) {
@@ -338,6 +452,8 @@ static int aesctr_create(const dvco_kv_t *cfg, size_t cfg_count, dvco_cipher_ctx
     ctx->pref_key_len = DVCO_AESCTR_KEY_LEN_DEFAULT;
     ctx->key_len      = 0u;
     ctx->is_active    = 0;
+    ctx->has_fixed_iv = 0;
+    memset(ctx->fixed_iv, 0, sizeof(ctx->fixed_iv));
     aesctr_set_error(ctx, NULL);
 
     rc = aesctr_load_cfg(ctx, cfg, cfg_count);
@@ -600,7 +716,9 @@ static int aesctr_encrypt(
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
-    if (RAND_bytes(iv, (int)sizeof(iv)) != 1) {
+    if (a->has_fixed_iv) {
+        memcpy(iv, a->fixed_iv, DVCO_AESCTR_IV_LEN);
+    } else if (RAND_bytes(iv, (int)sizeof(iv)) != 1) {
         aesctr_set_error(a, "RAND_bytes failed");
         return DVCO_CP_ERR_CRYPTO;
     }
