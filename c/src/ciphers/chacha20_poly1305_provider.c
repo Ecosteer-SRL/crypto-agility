@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
 
 // conf:
 //   key=0x...                    optional, fixed initial key, 32 bytes
@@ -10,7 +10,10 @@
 //   - unsupported keys => error
 //   - if key is omitted, rotate() must generate the runtime key
 //   - nonce is generated internally per encrypt()
-//   - AAD not supported
+
+//  ver 1.1 20/07/2026
+//  1) the decrypt function on failure now reset the provisional plaintext
+//  2) added AAD support in encrypt and decrypt function
 
 #include "ciphers/cipher_provider.h"
 #define DVCO_CIPHER_ID  4u
@@ -18,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -27,7 +31,7 @@
  * -------------------------------------------------------------------------- */
 
 #define DVCO_CHACHA20P1305_PROVIDER_NAME      "chacha20-poly1305"
-#define DVCO_CHACHA20P1305_PROVIDER_VERSION   "1.0"
+#define DVCO_CHACHA20P1305_PROVIDER_VERSION   "1.1"
 #define DVCO_CHACHA20P1305_PROVIDER_DESC      "DVCO ChaCha20-Poly1305 cipher provider (OpenSSL EVP)"
 
 #define DVCO_CHACHA20P1305_KEY_LEN            32u
@@ -446,14 +450,16 @@ static int chacha20p1305_compare_private(
     return chacha20p1305_compare_shareable(ctx, blob, blob_len);
 }
 
-static int chacha20p1305_encrypt(
+static int chacha20p1305_encrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     chacha20p1305_cipher_ctx_t *a = chacha20p1305_ctx_from_opaque(ctx);
     EVP_CIPHER_CTX *evp = NULL;
     uint8_t nonce[DVCO_CHACHA20P1305_NONCE_LEN];
@@ -461,40 +467,59 @@ static int chacha20p1305_encrypt(
     size_t needed;
     int outl1 = 0;
     int outl2 = 0;
+    int aad_outl = 0;
     int rc = DVCO_CP_ERR_CRYPTO;
 
-    if (a == NULL || out == NULL) {
+    if (a == NULL || out == NULL) 
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (!a->is_active) {
+    if (!a->is_active) 
+    {
         chacha20p1305_set_error(a, "provider is not active; rotate or deserialize_shareable first");
         return DVCO_CP_ERR_BAD_STATE;
     }
 
-    if ((in_len > 0u) && (in_data == NULL)) {
+    if ((in_len > 0u) && (in_data == NULL)) 
+    {
         chacha20p1305_set_error(a, "encrypt input is NULL");
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        chacha20p1305_set_error(a, "AAD not supported by ChaCha20-Poly1305 provider");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (aad == NULL && aad_len > 0u)
+    {
+        chacha20p1305_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
+    if (aad_len > INT_MAX || in_len > INT_MAX)
+    {
+        chacha20p1305_set_error(a, "AAD or plaintext length exceeds OpenSSL limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
+
+
+    // Required output size: nonce-length byte + nonce + ciphertext + authentication tag.
     needed = 1u + DVCO_CHACHA20P1305_NONCE_LEN + in_len + DVCO_CHACHA20P1305_TAG_LEN;
 
-    if (out->data == NULL) {
+    if (out->data == NULL) 
+    {
         out->len = needed;
         return DVCO_CP_OK;
     }
 
-    if (out->cap < needed) {
+    if (out->cap < needed) 
+    {
         out->len = needed;
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
-    if (RAND_bytes(nonce, (int)sizeof(nonce)) != 1) {
+    out->len = 0u;
+    
+    // Generate a cryptographically secure random nonce for this encryption.
+    if (RAND_bytes(nonce, (int)sizeof(nonce)) != 1) 
+    {
         chacha20p1305_set_error(a, "RAND_bytes failed");
         return DVCO_CP_ERR_CRYPTO;
     }
@@ -524,7 +549,26 @@ static int chacha20p1305_encrypt(
     out->data[0] = (uint8_t)DVCO_CHACHA20P1305_NONCE_LEN;
     memcpy(&out->data[1], nonce, DVCO_CHACHA20P1305_NONCE_LEN);
 
-    if (in_len > 0u) {
+
+    if (aad_len > 0u)
+    {
+        //  AAD available, feed the AAD
+        if (EVP_EncryptUpdate(
+                evp,
+                NULL,           // AAD produces no ciphertext
+                &aad_outl,
+                aad,
+                (int)aad_len
+            ) != 1)
+        {
+            chacha20p1305_set_error(a, "EVP_EncryptUpdate(AAD) failed");
+            goto done;
+        }
+    }
+
+
+    if (in_len > 0u) 
+    {
         if (EVP_EncryptUpdate(
                 evp,
                 &out->data[1u + DVCO_CHACHA20P1305_NONCE_LEN],
@@ -563,7 +607,8 @@ static int chacha20p1305_encrypt(
     rc = DVCO_CP_OK;
 
 done:
-    if (evp != NULL) {
+    if (evp != NULL) 
+    {
         EVP_CIPHER_CTX_free(evp);
     }
     chacha20p1305_secure_zero(nonce, sizeof(nonce));
@@ -571,14 +616,17 @@ done:
     return rc;
 }
 
-static int chacha20p1305_decrypt(
+
+static int chacha20p1305_decrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+)
+{
     chacha20p1305_cipher_ctx_t *a = chacha20p1305_ctx_from_opaque(ctx);
     EVP_CIPHER_CTX *evp = NULL;
     uint8_t nonce_len;
@@ -589,84 +637,153 @@ static int chacha20p1305_decrypt(
     size_t needed;
     int outl1 = 0;
     int outl2 = 0;
+    int aad_outl = 0;
     int rc = DVCO_CP_ERR_CRYPTO;
 
-    if (a == NULL || out == NULL) {
+    if (a == NULL || out == NULL)
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (!a->is_active) {
-        chacha20p1305_set_error(a, "provider is not active; rotate or deserialize_shareable first");
+    if (!a->is_active)
+    {
+        chacha20p1305_set_error(a,"provider is not active; rotate or deserialize_shareable first");
         return DVCO_CP_ERR_BAD_STATE;
     }
 
-    if (in_data == NULL) {
+    if (in_data == NULL)
+    {
         chacha20p1305_set_error(a, "decrypt input is NULL");
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        chacha20p1305_set_error(a, "AAD not supported by ChaCha20-Poly1305 provider");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (aad == NULL && aad_len > 0u)
+    {
+        chacha20p1305_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (in_len < (1u + DVCO_CHACHA20P1305_NONCE_LEN + DVCO_CHACHA20P1305_TAG_LEN)) {
+
+    if (in_len < (1u + DVCO_CHACHA20P1305_NONCE_LEN + DVCO_CHACHA20P1305_TAG_LEN))
+    {
         chacha20p1305_set_error(a, "ciphertext too short");
         return DVCO_CP_ERR_PARSE;
     }
 
     nonce_len = in_data[0];
-    if (nonce_len != DVCO_CHACHA20P1305_NONCE_LEN) {
+
+    if (nonce_len != DVCO_CHACHA20P1305_NONCE_LEN)
+    {
         chacha20p1305_set_error(a, "invalid nonce length");
         return DVCO_CP_ERR_PARSE;
     }
 
     nonce = &in_data[1];
     ct = &in_data[1u + (size_t)nonce_len];
+
+    // Blob format: [NONCE_LEN:1][NONCE:nonce_len][CIPHERTEXT:ct_len][TAG:16].
+    // Ciphertext length excludes the nonce-length byte, nonce,
+    // and authentication tag from the complete input blob.
     ct_len = in_len - 1u - (size_t)nonce_len - DVCO_CHACHA20P1305_TAG_LEN;
+
+    if (aad_len > INT_MAX || ct_len > INT_MAX)
+    {
+        chacha20p1305_set_error(a, "AAD or ciphertext length exceeds OpenSSL limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
+
+    //  get the tag
     tag = &in_data[in_len - DVCO_CHACHA20P1305_TAG_LEN];
 
     needed = ct_len;
 
-    if (out->data == NULL) {
+    if (out->data == NULL)
+    {
         out->len = needed;
         return DVCO_CP_OK;
     }
 
-    if (out->cap < needed) {
+    if (out->cap < needed)
+    {
         out->len = needed;
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
+    out->len = 0u;
+
+    // Allocate a new OpenSSL cipher context used to hold the decryption state.
     evp = EVP_CIPHER_CTX_new();
-    if (evp == NULL) {
-        chacha20p1305_set_error(a, "EVP_CIPHER_CTX_new failed");
+
+    if (evp == NULL)
+    {
+        chacha20p1305_set_error(a,"EVP_CIPHER_CTX_new failed");
         return DVCO_CP_ERR_ALLOC;
     }
 
-    if (EVP_DecryptInit_ex(evp, EVP_chacha20_poly1305(), NULL, NULL, NULL) != 1) {
-        chacha20p1305_set_error(a, "EVP_DecryptInit_ex(cipher) failed");
+    if (EVP_DecryptInit_ex(
+            evp,                        // OpenSSL cipher context
+            EVP_chacha20_poly1305(),    // ChaCha20-Poly1305 cipher implementation
+            NULL,                       // use OpenSSL's selected implementation, including built-in CPU acceleration
+            NULL,                       // key will be supplied in a later call
+            NULL                        // nonce will be supplied in a later call
+        ) != 1)
+    {
+        chacha20p1305_set_error(a,"EVP_DecryptInit_ex(cipher) failed");
         goto done;
     }
 
-    if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_AEAD_SET_IVLEN, (int)DVCO_CHACHA20P1305_NONCE_LEN, NULL) != 1) {
-        chacha20p1305_set_error(a, "EVP_CTRL_AEAD_SET_IVLEN failed");
+    if (EVP_CIPHER_CTX_ctrl(
+            evp,                                   // OpenSSL cipher context
+            EVP_CTRL_AEAD_SET_IVLEN,               // set the AEAD nonce/IV length
+            (int)DVCO_CHACHA20P1305_NONCE_LEN,     // nonce length in bytes: 12
+            NULL                                   // no additional data required
+        ) != 1)
+    {
+        chacha20p1305_set_error(a,"EVP_CTRL_AEAD_SET_IVLEN failed");
         goto done;
     }
 
-    if (EVP_DecryptInit_ex(evp, NULL, NULL, a->key, nonce) != 1) {
-        chacha20p1305_set_error(a, "EVP_DecryptInit_ex(key/nonce) failed");
+    if (EVP_DecryptInit_ex(
+            evp,       // OpenSSL cipher context
+            NULL,      // keep the previously selected cipher
+            NULL,      // no explicit legacy ENGINE
+            a->key,    // active 32-byte ChaCha20-Poly1305 key
+            nonce      // nonce extracted from the encrypted blob
+        ) != 1)
+    {
+        chacha20p1305_set_error(a,"EVP_DecryptInit_ex(key/nonce) failed");
         goto done;
     }
 
-    if (ct_len > 0u) {
+
+    if (aad_len > 0u)
+    {
+        //  AAD available, feed the AAD
         if (EVP_DecryptUpdate(
                 evp,
-                out->data,
-                &outl1,
-                ct,
-                (int)ct_len) != 1) {
-            chacha20p1305_set_error(a, "EVP_DecryptUpdate failed");
+                NULL,           // AAD produces no plaintext
+                &aad_outl,
+                aad,
+                (int)aad_len
+            ) != 1)
+        {
+            chacha20p1305_set_error(a, "EVP_DecryptUpdate(AAD) failed");
+            goto done;
+        }
+    }
+
+
+    if (ct_len > 0u)
+    {
+        if (EVP_DecryptUpdate(
+                evp,           // OpenSSL cipher context
+                out->data,     // output buffer for provisional plaintext
+                &outl1,        // receives the number of plaintext bytes written
+                ct,            // ciphertext to decrypt
+                (int)ct_len    // ciphertext length in bytes
+            ) != 1)
+        {
+            chacha20p1305_set_error(a,"EVP_DecryptUpdate failed");
             goto done;
         }
     }
@@ -675,29 +792,45 @@ static int chacha20p1305_decrypt(
             evp,
             EVP_CTRL_AEAD_SET_TAG,
             (int)DVCO_CHACHA20P1305_TAG_LEN,
-            (void *)tag) != 1) {
-        chacha20p1305_set_error(a, "EVP_CTRL_AEAD_SET_TAG failed");
+            (void *)tag) != 1)
+    {
+        chacha20p1305_set_error(a,"EVP_CTRL_AEAD_SET_TAG failed");
         goto done;
     }
 
     if (EVP_DecryptFinal_ex(
             evp,
             &out->data[(size_t)outl1],
-            &outl2) != 1) {
-        chacha20p1305_set_error(a, "EVP_DecryptFinal_ex failed (tag mismatch or corrupt ciphertext)");
-        rc = DVCO_CP_ERR_CRYPTO;
+            &outl2) != 1)
+    {
+        chacha20p1305_set_error(a,"EVP_DecryptFinal_ex failed ""(tag mismatch or corrupt ciphertext)");
         goto done;
     }
-    
+
     out->len = (size_t)outl1 + (size_t)outl2;
     rc = DVCO_CP_OK;
 
 done:
-    if (evp != NULL) {
+    if (rc != DVCO_CP_OK)
+    {
+        if (outl1 > 0)
+        {
+            // reset provisional plaintext
+            chacha20p1305_secure_zero(out->data,(size_t)outl1);
+        }
+
+        out->len = 0u;
+    }
+
+    if (evp != NULL)
+    {
         EVP_CIPHER_CTX_free(evp);
     }
+
     return rc;
 }
+
+
 
 static const char *chacha20p1305_last_error(dvco_cipher_ctx_t *ctx) {
     chacha20p1305_cipher_ctx_t *a = chacha20p1305_ctx_from_opaque(ctx);

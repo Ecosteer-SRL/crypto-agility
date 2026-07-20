@@ -57,7 +57,8 @@ Command:
 ./test_cipher_provider \
   --lib <provider_shared_library> \
   [--confstring "<provider_configuration>"] \
-  [--plain "<plaintext>"]
+  [--plain "<plaintext>"] \
+  [--aad "sometext"]
 
 Arguments:
 --lib <path>
@@ -69,6 +70,8 @@ Arguments:
 --plain "<text>"
   Optional plaintext used for the category-specific correctness test.
   If omitted, the default plaintext is "hello dvco".
+--aad "<text>"
+  Optional string used as the Additional Autheticated Data
 --help
 -h
   Print usage information.

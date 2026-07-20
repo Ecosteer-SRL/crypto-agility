@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.1
+// ver: 1.2
 
 /*
  * test_cipher_provider.c
@@ -63,6 +63,9 @@
  * - iid is no longer part of the provider model and is not handled here.
  */
 
+ // ver 1.2 20/07/2026
+ // added support for aad (--aad)
+
 #include "ciphers/cipher_provider.h"
 #include "padding/dvco_padding.h"
 
@@ -82,6 +85,7 @@ typedef struct app_cfg_s {
     const char *lib_path;
     const char *confstring;
     const char *plain;
+    const char *aad;            //  optional AAD (useful when the underlying cipher is AEAD)
 } app_cfg_t;
 
 typedef struct kv_list_s {
@@ -244,15 +248,21 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
         "Usage:\n"
-        "  %s --lib <provider.so> [--confstring \"k1=v1;k2=v2;...\"] [--plain <text>]\n"
+        "  %s --lib <provider.so> [--confstring \"k1=v1;k2=v2;...\"] [--plain <text>] [--aad <text>]\n"
         "\n"
         "Examples:\n"
         "  %s --lib ./build/release/lib/libaes_cbc_provider.so \\\n"
         "     --confstring \"keybits=256\" \\\n"
-        "     --plain \"hello dvco\"\n",
-        prog, prog
+        "     --plain \"hello dvco\"\n"
+        "\n"
+        "  %s --lib ./build/release/lib/libchacha20_poly1305_provider.so \\\n"
+        "     --confstring \"\" \\\n"
+        "     --plain \"hello dvco\" \\\n"
+        "     --aad \"product-123\"\n",
+        prog, prog, prog
     );
 }
+
 
 static int parse_args(int argc, char **argv, app_cfg_t *cfg) 
 {
@@ -273,6 +283,8 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg)
             cfg->confstring = argv[++i];
         } else if (strcmp(argv[i], "--plain") == 0 && (i + 1) < argc) {
             cfg->plain = argv[++i];
+        } else if (strcmp(argv[i], "--aad") == 0 && (i + 1) < argc) {
+            cfg->aad = argv[++i];
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 1;
@@ -291,6 +303,7 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg)
 
     return 0;
 }
+
 
 static char *trim_inplace(char *s) 
 {
@@ -499,6 +512,8 @@ static int alloc_encrypt_2call
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad,
+    size_t aad_len,    
     uint8_t **out_buf,
     size_t *out_len
 ) 
@@ -506,7 +521,15 @@ static int alloc_encrypt_2call
     dvco_buf_t b;
     int rc;
 
-    if (api == NULL || api->encrypt == NULL || ctx == NULL || out_buf == NULL || out_len == NULL) {
+    if (
+        api == NULL || 
+        api->encrypt == NULL || 
+        ctx == NULL || 
+        out_buf == NULL || 
+        out_len == NULL ||
+        (aad == NULL && aad_len > 0u)
+    )    
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -517,7 +540,7 @@ static int alloc_encrypt_2call
     b.len  = 0u;
     b.cap  = 0u;
 
-    rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->encrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         return rc;
     }
@@ -532,7 +555,7 @@ static int alloc_encrypt_2call
     }
     b.cap = b.len;
 
-    rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->encrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         free(b.data);
         return rc;
@@ -549,6 +572,8 @@ static int alloc_decrypt_2call
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad,
+    size_t aad_len,    
     uint8_t **out_buf,
     size_t *out_len
 ) 
@@ -556,7 +581,14 @@ static int alloc_decrypt_2call
     dvco_buf_t b;
     int rc;
 
-    if (api == NULL || api->decrypt == NULL || ctx == NULL || out_buf == NULL || out_len == NULL) {
+    if (
+        api == NULL || 
+        api->decrypt == NULL || 
+        ctx == NULL || 
+        out_buf == NULL || 
+        out_len == NULL || 
+        (aad == NULL && aad_len > 0u)) 
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -567,7 +599,7 @@ static int alloc_decrypt_2call
     b.len  = 0u;
     b.cap  = 0u;
 
-    rc = api->decrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->decrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         return rc;
     }
@@ -582,7 +614,7 @@ static int alloc_decrypt_2call
     }
     b.cap = b.len;
 
-    rc = api->decrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->decrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         free(b.data);
         return rc;
@@ -660,7 +692,9 @@ static int run_symmetric_provider_test
     const kv_list_t *kv,
     const uint8_t *plain_bytes,
     size_t plain_len,
-    const char *plain_text
+    const char *plain_text,
+    const uint8_t *aad,
+    size_t aad_len    
 ) 
 {
     dvco_cipher_ctx_t *ctx_a = NULL;
@@ -717,6 +751,10 @@ static int run_symmetric_provider_test
     }
 
     printf("plaintext: \"%s\" (%zu bytes)\n", plain_text, plain_len);
+    if (aad != NULL)
+    {
+        printf("aad: \"%s\" (%zu bytes)\n", aad, aad_len);
+    }
 
     rc = alloc_pad_if_needed(info, plain_bytes, plain_len, &encrypt_input, &encrypt_input_len);
     print_rc("prepare_encrypt_input", rc);
@@ -726,7 +764,7 @@ static int run_symmetric_provider_test
 
     dump_hex("encrypt_input", encrypt_input, encrypt_input_len);
 
-    rc = alloc_encrypt_2call(api, ctx_a, encrypt_input, encrypt_input_len, &ciphertext, &ciphertext_len);
+    rc = alloc_encrypt_2call(api, ctx_a, encrypt_input, encrypt_input_len, aad, aad_len, &ciphertext, &ciphertext_len);
     print_rc("encrypt(ctx_a)", rc);
     if (rc != DVCO_CP_OK) {
         print_provider_last_error(api, ctx_a);
@@ -803,7 +841,7 @@ static int run_symmetric_provider_test
         goto done;
     }
 
-    rc = alloc_decrypt_2call(api, ctx_b, ciphertext, ciphertext_len, &plaintext_out, &plaintext_out_len);
+    rc = alloc_decrypt_2call(api, ctx_b, ciphertext, ciphertext_len, aad, aad_len, &plaintext_out, &plaintext_out_len);
     print_rc("decrypt(ctx_b)", rc);
     if (rc != DVCO_CP_OK) {
         print_provider_last_error(api, ctx_b);
@@ -859,7 +897,9 @@ static int run_asymmetric_provider_test
     const kv_list_t *kv,
     const uint8_t *plain_bytes,
     size_t plain_len,
-    const char *plain_text
+    const char *plain_text,
+    const uint8_t *aad,
+    size_t aad_len    
 ) 
 {
     dvco_cipher_ctx_t *ctx_keypair = NULL;
@@ -994,7 +1034,7 @@ static int run_asymmetric_provider_test
 
     dump_hex("encrypt_input", encrypt_input, encrypt_input_len);
 
-    rc = alloc_encrypt_2call(api, ctx_pub, encrypt_input, encrypt_input_len, &ciphertext, &ciphertext_len);
+    rc = alloc_encrypt_2call(api, ctx_pub, encrypt_input, encrypt_input_len, aad, aad_len, &ciphertext, &ciphertext_len);
     print_rc("encrypt(ctx_pub)", rc);
     if (rc != DVCO_CP_OK) {
         print_provider_last_error(api, ctx_pub);
@@ -1002,7 +1042,7 @@ static int run_asymmetric_provider_test
     }
     dump_hex("ciphertext", ciphertext, ciphertext_len);
 
-    rc = alloc_decrypt_2call(api, ctx_priv, ciphertext, ciphertext_len, &plaintext_out, &plaintext_out_len);
+    rc = alloc_decrypt_2call(api, ctx_priv, ciphertext, ciphertext_len, aad, aad_len, &plaintext_out, &plaintext_out_len);
     print_rc("decrypt(ctx_priv)", rc);
     if (rc != DVCO_CP_OK) {
         print_provider_last_error(api, ctx_priv);
@@ -1067,6 +1107,9 @@ int main(int argc, char **argv)
     uint16_t category;
     uint16_t variant;
 
+    const uint8_t *aad_bytes = NULL;
+    size_t aad_len = 0u;    
+
     int rc;
     int exit_code = 1;
 
@@ -1077,12 +1120,18 @@ int main(int argc, char **argv)
         return (rc > 0) ? 0 : 1;
     }
 
+
     rc = parse_confstring(cfg.confstring, &kv);
     print_rc("parse_confstring", rc);
     if (rc != DVCO_CP_OK) {
         fprintf(stderr, "Invalid confstring: %s\n", cfg.confstring ? cfg.confstring : "(null)");
         goto done;
     }
+
+    if (cfg.aad != NULL) {
+        aad_bytes = (const uint8_t *)cfg.aad;
+        aad_len = strlen(cfg.aad);
+    }    
 
     plain_text  = cfg.plain;
     plain_bytes = (const uint8_t *)plain_text;
@@ -1155,10 +1204,10 @@ int main(int argc, char **argv)
 
     if (category == CRAG_PROVIDER_CATEGORY_SYMMETRIC) {
         printf("test path        : symmetric\n");
-        exit_code = run_symmetric_provider_test(api, &info, &kv, plain_bytes, plain_len, plain_text);
+        exit_code = run_symmetric_provider_test(api, &info, &kv, plain_bytes, plain_len, plain_text, aad_bytes, aad_len);
     } else if (category == CRAG_PROVIDER_CATEGORY_ASYMMETRIC) {
         printf("test path        : asymmetric\n");
-        exit_code = run_asymmetric_provider_test(api, &info, &kv, plain_bytes, plain_len, plain_text);
+        exit_code = run_asymmetric_provider_test(api, &info, &kv, plain_bytes, plain_len, plain_text, aad_bytes, aad_len);
     } else {
         fprintf(stderr, "Unsupported provider category: %u\n", (unsigned)category);
         goto done;
