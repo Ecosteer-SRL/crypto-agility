@@ -116,8 +116,8 @@ static void usage(const char *prog)
     (
         stderr,
         "Usage:\n"
-        "  %s --lib <provider.so> --confstring \"k1=v1;k2=v2\" "
-        "--plain <text> [--aad <text>]\n"
+        "  %s --lib <provider.so> [--confstring \"k1=v1;k2=v2\"] "
+        "[--plain <text>] [--aad <text>]\n"
         "\n"
         "Example:\n"
         "  %s --lib ../../build/debug/lib/libaes_gcm_provider.so \\\n"
@@ -328,7 +328,7 @@ static void print_provider_last_error(const dvco_cipher_provider_api_t *api, dvc
 {
     const char *s;
 
-    if(api == NULL || api->last_error == NULL) {
+    if(api == NULL || ctx == NULL || api->last_error == NULL) {
         return;
     }
 
