@@ -5,19 +5,21 @@
 
 /*
     probe_cipher_provider.c
-    Minimal deterministic provider-vector tool.
+    Cipher-provider diagnostic probe.
 
     Purpose
     -------
-    Load one CRAG cipher provider, create an encryption context from the
-    supplied confstring, encrypt the supplied plaintext, serialize the
+    Load one CRAG cipher provider, create an encryption context, prepare or
+    generate provider material, encrypt the supplied plaintext, serialize the
     shareable blob, import it into a second context, and decrypt the ciphertext.
 
     Important
     ---------
-    This tool intentionally does not call reset() or rotate().
-    The caller-provided confstring is the source of truth for the key.
- */
+    When provider material is supplied through the confstring, the probe uses
+    it directly. When the confstring is empty, the probe calls rotate() to
+    generate usable provider material.
+*/
+
 
 //  ver 1.1     21/07/2026
 //  added AEAD AAD support (--aad)
