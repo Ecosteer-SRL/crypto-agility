@@ -11,6 +11,8 @@ ${PROGFOLDER}/bench_cipher_provider \
 --confstring "" \
 --size ${SIZE} \
 --iters ${ITERS} \
---decrypt-mode cycle
+--decrypt-mode cycle \
+--aad "aadamello"
+
 
 

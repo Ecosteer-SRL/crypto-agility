@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
 
 
 // conf:
@@ -15,7 +15,13 @@
 //   - if iv is omitted, nonce is generated internally per encrypt()
 //   - if iv is provided, it is used as fixed nonce for deterministic tests only
 //   - iv is local encryption configuration; it is not serialized
-//   - AAD not supported
+
+// WARNING:
+// A fixed IV is intended only for deterministic probe/interoperability tests.
+// Reusing the same IV with the same AES-GCM key compromises security.
+
+//  ver 1.1     21/07/2026
+//  added AEAD aad support
 
 #include "ciphers/cipher_provider.h"
 #define DVCO_CIPHER_ID  5u
@@ -23,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -32,7 +39,7 @@
 // --------------------------------------------------------------------------
 
 #define DVCO_AESGCM_PROVIDER_NAME        "aes-gcm"
-#define DVCO_AESGCM_PROVIDER_VERSION     "1.0"
+#define DVCO_AESGCM_PROVIDER_VERSION     "1.1"
 #define DVCO_AESGCM_PROVIDER_DESC        "DVCO AES-GCM AEAD cipher provider (OpenSSL EVP)"
 
 #define DVCO_AESGCM_BLOCK_SIZE           16u
@@ -647,14 +654,16 @@ static int aesgcm_compare_private(
     return aesgcm_compare_shareable(ctx, blob, blob_len);
 }
 
-static int aesgcm_encrypt(
+static int aesgcm_encrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     aesgcm_cipher_ctx_t *a = aesgcm_ctx_from_opaque(ctx);
     const EVP_CIPHER *cipher;
     EVP_CIPHER_CTX *evp = NULL;
@@ -665,10 +674,12 @@ static int aesgcm_encrypt(
     int outl1 = 0;
     int outl2 = 0;
     int rc = DVCO_CP_ERR_CRYPTO;
+    int aad_outl = 0;
 
     if (a == NULL || out == NULL) {
         return DVCO_CP_ERR_INVALID_ARG;
     }
+
 
     if (!a->is_active) {
         aesgcm_set_error(a, "provider is not active; rotate or deserialize_shareable first");
@@ -680,9 +691,10 @@ static int aesgcm_encrypt(
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        aesgcm_set_error(a, "AAD not supported by AES-GCM provider v1");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (aad == NULL && aad_len > 0u)
+    {
+        aesgcm_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
     cipher = aesgcm_select_evp_cipher(a);
@@ -690,6 +702,14 @@ static int aesgcm_encrypt(
         aesgcm_set_error(a, "invalid AES-GCM state");
         return DVCO_CP_ERR_BAD_STATE;
     }
+
+    if (aad_len > INT_MAX || in_len > INT_MAX)
+    {
+        aesgcm_set_error(a, "AAD or plaintext length exceeds OpenSSL limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
+
+    out->len = 0u;
 
     // Provider-owned frame:
     // [nonce_len:1][nonce:12][ciphertext:in_len][tag:16]
@@ -736,6 +756,22 @@ static int aesgcm_encrypt(
         goto done;
     }
 
+    if (aad_len > 0u)
+    {
+        if (EVP_EncryptUpdate(
+                evp,
+                NULL,
+                &aad_outl,
+                aad,
+                (int)aad_len
+            ) != 1)
+        {
+            aesgcm_set_error(a, "EVP_EncryptUpdate(AAD) failed");
+            goto done;
+        }
+    }    
+
+
     out->data[0] = (uint8_t)DVCO_AESGCM_NONCE_LEN;
     memcpy(&out->data[1], nonce, DVCO_AESGCM_NONCE_LEN);
     ct_off = 1u + DVCO_AESGCM_NONCE_LEN;
@@ -751,6 +787,7 @@ static int aesgcm_encrypt(
             goto done;
         }
     }
+
 
     if (EVP_EncryptFinal_ex(
             evp,
@@ -778,14 +815,16 @@ static int aesgcm_encrypt(
     return rc;
 }
 
-static int aesgcm_decrypt(
+static int aesgcm_decrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     aesgcm_cipher_ctx_t *a = aesgcm_ctx_from_opaque(ctx);
     const EVP_CIPHER *cipher;
     EVP_CIPHER_CTX *evp = NULL;
@@ -798,6 +837,7 @@ static int aesgcm_decrypt(
     int outl1 = 0;
     int outl2 = 0;
     int rc = DVCO_CP_ERR_CRYPTO;
+    int aad_outl = 0;
 
     if (a == NULL || out == NULL) {
         return DVCO_CP_ERR_INVALID_ARG;
@@ -813,9 +853,10 @@ static int aesgcm_decrypt(
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        aesgcm_set_error(a, "AAD not supported by AES-GCM provider v1");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (aad == NULL && aad_len > 0u)
+    {
+        aesgcm_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
     cipher = aesgcm_select_evp_cipher(a);
@@ -840,7 +881,14 @@ static int aesgcm_decrypt(
     ct_len = in_len - 1u - (size_t)nonce_len - DVCO_AESGCM_TAG_LEN;
     tag = &in_data[in_len - DVCO_AESGCM_TAG_LEN];
 
+    if (aad_len > INT_MAX || ct_len > INT_MAX)
+    {
+        aesgcm_set_error(a, "AAD or ciphertext length exceeds OpenSSL limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
+
     needed = ct_len;
+    out->len = 0u;
 
     if (out->data == NULL) {
         out->len = needed;
@@ -851,6 +899,8 @@ static int aesgcm_decrypt(
         out->len = needed;
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
+
+    
 
     evp = EVP_CIPHER_CTX_new();
     if (evp == NULL) {
@@ -872,6 +922,21 @@ static int aesgcm_decrypt(
         aesgcm_set_error(a, "EVP_DecryptInit_ex key/nonce failed");
         goto done;
     }
+
+    if (aad_len > 0u)
+    {
+        if (EVP_DecryptUpdate(
+                evp,
+                NULL,
+                &aad_outl,
+                aad,
+                (int)aad_len
+            ) != 1)
+        {
+            aesgcm_set_error(a, "EVP_DecryptUpdate(AAD) failed");
+            goto done;
+        }
+    }    
 
     if (ct_len > 0u) {
         if (EVP_DecryptUpdate(
@@ -902,12 +967,25 @@ static int aesgcm_decrypt(
     out->len = (size_t)outl1 + (size_t)outl2;
     rc = DVCO_CP_OK;
 
- done:
+done:
+    if (rc != DVCO_CP_OK)
+    {
+        if (out->data != NULL && outl1 > 0)
+        {
+            aesgcm_secure_zero(out->data, (size_t)outl1);
+        }
+
+        out->len = 0u;
+    }
+
     if (evp != NULL) {
         EVP_CIPHER_CTX_free(evp);
     }
+
     return rc;
 }
+
+
 
 static const char *aesgcm_last_error(dvco_cipher_ctx_t *ctx) {
     aesgcm_cipher_ctx_t *a = aesgcm_ctx_from_opaque(ctx);
