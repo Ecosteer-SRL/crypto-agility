@@ -3,84 +3,57 @@ test_cipher_provider
 ====================================================
 
 Purpose:
-test_cipher_provider is a standalone compliance test tool for cipher providers
-compliant with the crypto-agility framework.
-Its objective is to verify whether a cipher-provider implementation exposes and
-exercises the complete mandatory vtable defined by the cipher-provider framework.
-To do this, the program loads a provider shared library at runtime, resolves the
-provider API, obtains the vtable, checks that all required functions are available
-and callable, reads the provider metadata, and selects the appropriate test path
-based on the provider category.
-It then exercises the provider lifecycle through the vtable to confirm that the
-implementation behaves consistently with the framework contract.
+test_cipher_provider verifies that a runtime-loadable cipher provider complies
+with the crypto-agility framework ABI and lifecycle contract.
 
-Compliance Logic:
-The program checks compliance by loading the provider dynamically, verifying that
-the provider exposes the expected ABI entry point and mandatory vtable functions,
-and reading the provider metadata returned by get_info().
-The metadata includes category_flags, which tells the tool whether the provider
-must be exercised as a symmetric provider, an asymmetric provider, or another
-supported provider category.
+Logic:
+The tool:
+ 1) Parses the arguments and provider confstring.
+ 2) Loads the provider shared library with dlopen().
+ 3) Resolves dvco_cipher_provider_get_api() with dlsym().
+ 4) Checks the mandatory provider functions.
+ 5) Reads and prints the provider metadata.
+ 6) Exercises create, reset, rotate, serialization, deserialization,
+    comparison, encryption, decryption, and destruction.
+ 7) Selects the symmetric or asymmetric test path from category_flags.
+ 8) Verifies the final operation result.
 
-The main sequence is:
- 1) Parse command-line arguments and confstring.
- 2) Load the provider .so with dlopen().
- 3) Resolve dvco_cipher_provider_get_api with dlsym().
- 4) Call dvco_cipher_provider_get_api() to obtain the provider vtable.
- 5) Check that all mandatory vtable functions are present:
-    get_info, create, destroy, reset, rotate,
-    serialize_shareable, deserialize_shareable,
-    serialize_private, deserialize_private,
-    compare_shareable, compare_private,
-    encrypt, decrypt, last_error.
- 6) Call get_info() and print provider metadata, including category_flags.
- 7) Call create() to create the first provider context.
- 8) Call reset() on the first provider context.
- 9) Call rotate() to generate or activate provider material.
-10) Call serialize_shareable().
-11) Call serialize_private().
-12) Create one or more additional provider contexts as required by the
-    provider category.
-13) Call deserialize_shareable() and deserialize_private() as required by
-    the selected category-specific test path.
-14) Call compare_shareable().
-15) Call compare_private().
-16) Exercise the provider operation path selected according to category_flags.
-    For symmetric providers, this is the encrypt/decrypt roundtrip path.
-    For asymmetric providers, this is the asymmetric operation path implemented
-    by the tool.
-17) Verify that the produced result is consistent with the expected result for
-    the selected provider category.
-18) Destroy all contexts and close the provider library.
+When --aad is supplied, the same Additional Authenticated Data is passed to
+encryption and decryption.
 
 Command:
 ./test_cipher_provider \
   --lib <provider_shared_library> \
   [--confstring "<provider_configuration>"] \
   [--plain "<plaintext>"] \
-  [--aad "sometext"]
+  [--aad "<text>"]
 
 Arguments:
 --lib <path>
-  Path to the runtime-loadable cipher-provider shared library to be tested.
+  Provider shared library.
+
 --confstring "<string>"
-  Optional provider-specific configuration string.
-  The string is parsed by the tool and passed to the provider create() function.
-  If omitted, an empty configuration string is used.
+  Optional provider configuration passed to create().
+  If omitted, an empty configuration is used.
+
 --plain "<text>"
-  Optional plaintext used for the category-specific correctness test.
-  If omitted, the default plaintext is "hello dvco".
+  Optional plaintext.
+  Default: "hello dvco".
+
 --aad "<text>"
-  Optional string used as the Additional Autheticated Data
+  Optional Additional Authenticated Data used for both encryption and
+  decryption.
+
 --help
 -h
   Print usage information.
 
 Example:
 ../../build/debug/bin/test_cipher_provider \
-  --lib ../../build/debug/lib/libaes_gcm_provider.so \
+  --lib ../../build/debug/lib/libchacha20_poly1305_provider.so \
   --confstring "" \
-  --plain "hello dvco"
+  --plain "hello dvco" \
+  --aad "product-123"
 
 
 ====================================================
@@ -88,230 +61,148 @@ bench_cipher_provider
 ====================================================
 
 Purpose:
-bench_cipher_provider is a standalone benchmark tool for cipher providers.
-It measures provider throughput when a cipher-provider implementation is exercised
-through the cipher-provider framework ABI.
-The program loads a provider shared library at runtime, resolves the provider API,
-obtains the vtable, prepares deterministic input data, verifies that the provider
-can complete the category-specific correctness path, and then measures the
-corresponding provider operation throughput.
-The tool is provider-neutral: it does not benchmark a raw cryptographic primitive
-directly, but the provider execution path through the framework vtable ABI.
+bench_cipher_provider measures cipher-provider performance through the
+crypto-agility framework ABI.
 
-Benchmark Logic:
-The program benchmarks a provider by first executing a category-specific
-correctness setup phase and then running the benchmark phases supported for that
-provider category.
-The provider category is read from category_flags returned by get_info().
+Logic:
+The tool:
+ 1) Parses the arguments and provider confstring.
+ 2) Creates deterministic plaintext of the requested size.
+ 3) Loads the provider and reads its metadata.
+ 4) Prepares the category-specific encryption and decryption contexts.
+ 5) Runs a correctness roundtrip.
+ 6) Measures encryption throughput.
+ 7) Measures decryption using one of these modes:
 
-The main sequence is:
- 1) Parse command-line arguments and confstring.
- 2) Allocate a deterministic input buffer of the requested size.
- 3) Fill the input buffer using:
-    input[i] = (uint8_t)(i & 0xff)
- 4) Load the provider .so with dlopen().
- 5) Resolve dvco_cipher_provider_get_api with dlsym().
- 6) Call dvco_cipher_provider_get_api() to obtain the provider vtable.
- 7) Check that the required benchmark vtable functions are present:
-    get_info, create, destroy, rotate,
-    serialize_shareable, deserialize_shareable,
-    encrypt, decrypt.
- 8) Call get_info() and read provider metadata, including category_flags.
- 9) Select the benchmark path according to category_flags.
-10) For symmetric providers, prepare an encryption input, applying caller-side
-    padding if the provider metadata requires it.
-11) For symmetric providers, run a correctness encrypt/decrypt roundtrip before
-    benchmarking.
-12) For asymmetric providers, run the asymmetric correctness path implemented
-    by the tool before benchmarking.
-13) Abort the benchmark if the correctness check fails.
-14) Run the benchmark operation path selected according to category_flags.
-15) For symmetric providers, run the encryption benchmark.
-16) For symmetric providers, run the decrypt benchmark according to
-    --decrypt-mode:
-    reuse:
-      create a decrypt context once
-      deserialize_shareable into the decrypt context once
-      repeat N times:
-        decrypt the immutable reference ciphertext
-      destroy the decrypt context
-    cycle:
-      repeat N times:
-        create a fresh decrypt context
-        deserialize_shareable into the decrypt context
-        decrypt the immutable reference ciphertext
-        destroy the decrypt context
-17) For asymmetric providers, run the asymmetric benchmark path implemented by
-    the tool.
-18) Print provider metadata, category_flags, payload sizes, selected benchmark
-    mode, timings, operations per second, and MiB/s results where applicable.
-19) Destroy contexts, close the provider library, and release allocated buffers.
+    reuse
+      Create and initialize one decrypt context, then decrypt N times.
+
+    cycle
+      Create, initialize, decrypt, and destroy the context on every iteration.
+
+ 8) Prints timings, operations per second, and MiB/s.
+
+When --aad is supplied, the same Additional Authenticated Data is used by the
+correctness check and by every timed encryption and decryption operation.
+MiB/s is calculated from payload bytes; AAD processing time is included.
 
 Command:
 ./bench_cipher_provider \
   --cipher <provider_shared_library> \
   [--confstring "<provider_configuration>"] \
+  [--aad "<text>"] \
   [--size <bytes>] \
   [--iters <n>] \
   [--decrypt-mode <reuse|cycle>]
 
 Arguments:
 --cipher <path>
-  Path to the runtime-loadable cipher-provider shared library to be benchmarked.
+  Provider shared library.
+
 --lib <path>
   Alias for --cipher.
+
 --confstring "<string>"
-  Optional provider-specific configuration string.
-  The string is parsed by the tool and passed to the provider create() function.
-  If omitted, an empty configuration string is used.
+  Optional provider configuration passed to create().
+  If omitted, an empty configuration is used.
+
+--aad "<text>"
+  Optional Additional Authenticated Data used for encryption and decryption.
+
 --size <bytes>
-  Optional input payload size in bytes.
-  If omitted, the default size is 1024 bytes.
+  Plaintext size.
+  Default: 1024.
+
 --iters <n>
-  Optional number of benchmark iterations.
-  If omitted, the default number of iterations is 100000.
+  Number of iterations.
+  Default: 100000.
+
 --decrypt-mode <reuse|cycle>
-  Optional decrypt benchmark mode used by symmetric-provider benchmarks.
-  reuse creates one decrypt context, imports shareable material once, and repeats decrypt N times.
-  cycle creates a fresh decrypt context, imports shareable material, decrypts once, and
-  destroys the context for each iteration.
-  If omitted, reuse is used.
+  Decryption benchmark mode.
+  Default: reuse.
+
 --help
 -h
   Print usage information.
 
 Example:
 ../../build/release/bin/bench_cipher_provider \
-  --cipher ../../build/release/lib/libaes_gcm_provider.so \
+  --cipher ../../build/release/lib/libchacha20_poly1305_provider.so \
   --confstring "" \
+  --aad "product-123" \
   --size 1024 \
   --iters 100000 \
-  --decrypt-mode reuse
+  --decrypt-mode cycle
+
 
 ====================================================
 probe_cipher_provider
 ====================================================
 
 Purpose:
-probe_cipher_provider is a standalone diagnostic tool for cipher providers.
-Its objective is not to replace test_cipher_provider and not to replace
-bench_cipher_provider.
-Instead, it is used to produce reproducible provider evidence useful when
-debugging, comparing, or porting cipher providers across environments such as
-Linux and MCU firmware.
+probe_cipher_provider prints provider inputs, serialized material, ciphertext,
+decrypted output, and roundtrip evidence.
 
-The tool loads a provider shared library at runtime, resolves the provider API,
-creates provider contexts through the framework ABI, prepares a controlled input,
-runs the provider operation path, and prints the relevant material and results in
-a form that can be compared manually or captured in logs.
-It is especially useful when validating whether two implementations of the same
-provider produce compatible shareable material, ciphertext framing, padding
-behavior, and decrypted plaintext.
+Use it to inspect provider behavior, compare implementations, and validate
+Linux/MCU interoperability before involving the complete application stack.
 
-probe_cipher_provider is intentionally generic.
-The name does not imply that the provider uses an IV, nonce, counter, or other
-cipher vector.
-A provider without IV/nonce/counter can still be probed.
-Likewise, the tool can be used with providers that support deterministic test
-vectors, providers that generate fresh material through rotate(), or providers
-that only need to print reproducible evidence for inspection.
+Logic:
+The tool:
+ 1) Parses the arguments and provider confstring.
+ 2) Loads the provider and reads its metadata.
+ 3) Creates the encryption context.
+ 4) Uses material supplied through the confstring, when present.
+ 5) Calls rotate() when no usable material is supplied.
+ 6) Applies caller-side padding when required by provider metadata.
+ 7) Serializes and prints the shareable material.
+ 8) Encrypts the plaintext.
+ 9) Imports the shareable material into a second context.
+10) Decrypts and removes caller-side padding when required.
+11) Verifies the roundtrip.
+12) Prints text, hexadecimal, and Base64 evidence.
 
-Diagnostic Logic:
-The program probes a provider by executing a focused provider operation and
-printing the resulting evidence.
-The output is intended to answer the question:
-
-  What exactly does this provider produce with this configuration and input?
-
-The main sequence is:
- 1) Parse command-line arguments and confstring.
- 2) Load the provider .so with dlopen().
- 3) Resolve dvco_cipher_provider_get_api with dlsym().
- 4) Call dvco_cipher_provider_get_api() to obtain the provider vtable.
- 5) Check that the required vtable functions are present for the selected
-    provider category.
- 6) Call get_info() and print provider metadata, including category_flags.
- 7) Call create() to create an encryption/provider context.
- 8) Call rotate() unless the selected provider configuration already supplies
-    deterministic material.
- 9) Prepare the plaintext input.
-10) Apply caller-side padding if required by provider metadata.
-11) Call encrypt() and print the ciphertext.
-12) Call serialize_shareable() and print the shareable material.
-13) Create a second provider context for decrypt-side validation.
-14) Call deserialize_shareable() on the second context.
-15) Call decrypt() on the ciphertext.
-16) Normalize the decrypted output when padding removal is required.
-17) Print the decrypted plaintext and compare it with the original input.
-18) Print all relevant diagnostic evidence in hex and/or text form.
-19) Destroy all contexts and close the provider library.
-
-Typical evidence printed by the tool includes:
-  provider ABI
-  provider name
-  provider version
-  provider description
-  provider cid
-  category_flags
-  pad_apply
-  pad_block_size
-  confstring
-  plaintext
-  encryption input
-  ciphertext
-  shareable material
-  decrypted raw output
-  normalized decrypted output
-  final roundtrip result
+When --aad is supplied, the same Additional Authenticated Data is passed to
+encryption and decryption. The AAD is also printed as text, hexadecimal,
+Base64, and summary.aad_hex.
 
 Command:
 ./probe_cipher_provider \
   --lib <provider_shared_library> \
   [--confstring "<provider_configuration>"] \
-  [--plain "<plaintext>"]
+  [--plain "<plaintext>"] \
+  [--aad "<text>"]
 
 Arguments:
 --lib <path>
-  Path to the runtime-loadable cipher-provider shared library to be probed.
---cipher <path>
-  Alias for --lib, if supported by the build of the tool.
+  Provider shared library.
+
 --confstring "<string>"
-  Optional provider-specific configuration string.
-  The string is parsed by the tool and passed to the provider create() function.
-  If omitted, an empty configuration string is used.
+  Optional provider configuration.
+  When omitted or empty, the tool generates provider material through rotate().
+
 --plain "<text>"
-  Optional plaintext used for the diagnostic provider operation.
-  If omitted, the default plaintext is "hello dvco".
+  Optional plaintext.
+  Default: "hello dvco".
+
+--aad "<text>"
+  Optional Additional Authenticated Data used for encryption and decryption.
+
 --help
 -h
   Print usage information.
 
 Example:
 ../../build/debug/bin/probe_cipher_provider \
-  --lib ../../build/debug/lib/libblowfish_ecb_provider.so \
-  --confstring "" \
-  --plain "hello dvco"
-
-Intended Usage:
-Use probe_cipher_provider when the objective is to inspect provider behavior,
-not to run a formal compliance test and not to measure throughput.
-
-Typical use cases are:
-  compare Linux and MCU provider output
-  verify shareable serialization format
-  verify ciphertext framing
-  verify padding behavior
-  verify deterministic fixed-key or fixed-IV configurations
-  capture evidence before involving DVCO publisher/subscriber logic
-  capture evidence before involving MQTT, HTTPS, proxy, or rotation logic
+  --lib ../../build/debug/lib/libchacha20_poly1305_provider.so \
+  --plain "hello dvco running on psoc" \
+  --aad "aadangraz"
 
 Relationship With Other Tools:
-test_cipher_provider verifies that the provider satisfies the framework contract.
+test_cipher_provider verifies the provider contract.
 bench_cipher_provider measures provider performance.
-probe_cipher_provider prints reproducible diagnostic evidence.
+probe_cipher_provider shows what the provider produces.
 
 In short:
   test  = is the provider contract correct?
   bench = how fast is the provider?
   probe = what exactly does the provider produce?
-

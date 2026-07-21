@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.4
+// ver: 1.5
 
 // bench_cipher_provider.c
 //
@@ -47,6 +47,9 @@
 // - Padding is applied/unapplied outside the provider, according to provider metadata,
 //   exactly as the current test tool does.
 
+//  ver 1.5 21/07/2026
+//  added AEAD AAD support
+
 #include "ciphers/cipher_provider.h"
 #include "padding/dvco_padding.h"
 
@@ -78,6 +81,7 @@ typedef struct app_cfg_s {
     size_t plain_len;
     size_t iters;
     decrypt_mode_t decrypt_mode;
+    const char *aad;
 } app_cfg_t;
 
 typedef struct kv_list_s {
@@ -96,10 +100,11 @@ typedef struct bench_result_s {
     double dec_mib_sec;
 } bench_result_t;
 
-static void usage(const char *prog) {
+static void usage(const char *prog)
+{
     fprintf(stderr,
         "Usage:\n"
-        "  %s --cipher <provider.so> [--confstring \"k1=v1;k2=v2\"] [--size <bytes>] [--iters <n>] [--decrypt-mode <reuse|cycle>]\n"
+        "  %s --cipher <provider.so> [--confstring \"k1=v1;k2=v2\"] [--aad <text>] [--size <bytes>] [--iters <n>] [--decrypt-mode <reuse|cycle>]\n"
         "\n"
         "Aliases:\n"
         "  --lib <provider.so> is accepted as an alias for --cipher\n"
@@ -112,7 +117,12 @@ static void usage(const char *prog) {
         "  reuse\n"
         "\n"
         "Examples:\n"
-        "  %s --cipher ../../build/release/lib/libaes_gcm_provider.so --confstring \"\" --size 1024 --iters 100000 --decrypt-mode reuse\n",
+        "  %s --cipher ../../build/release/lib/libaes_gcm_provider.so \\\n"
+        "     --confstring \"\" \\\n"
+        "     --aad \"product-123\" \\\n"
+        "     --size 1024 \\\n"
+        "     --iters 100000 \\\n"
+        "     --decrypt-mode reuse\n",
         prog,
         prog
     );
@@ -224,7 +234,8 @@ static int validate_provider_category(const dvco_cipher_provider_info_t *info) {
     return DVCO_CP_OK;
 }
 
-static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
+static int parse_args(int argc, char **argv, app_cfg_t *cfg)
+{
     int i;
 
     if (cfg == NULL) {
@@ -238,31 +249,42 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg) {
     cfg->decrypt_mode = DECRYPT_MODE_REUSE;
 
     for (i = 1; i < argc; i++) {
-        if ((strcmp(argv[i], "--cipher") == 0 || strcmp(argv[i], "--lib") == 0) && (i + 1) < argc) {
+        if ((strcmp(argv[i], "--cipher") == 0 ||
+             strcmp(argv[i], "--lib") == 0) &&
+            (i + 1) < argc) {
             cfg->lib_path = argv[++i];
 
-        } else if (strcmp(argv[i], "--confstring") == 0 && (i + 1) < argc) {
+        } else if (strcmp(argv[i], "--confstring") == 0 &&
+                   (i + 1) < argc) {
             cfg->confstring = argv[++i];
 
-        } else if (strcmp(argv[i], "--size") == 0 && (i + 1) < argc) {
+        } else if (strcmp(argv[i], "--aad") == 0 &&
+                   (i + 1) < argc) {
+            cfg->aad = argv[++i];
+
+        } else if (strcmp(argv[i], "--size") == 0 &&
+                   (i + 1) < argc) {
             if (parse_size_value(argv[++i], &cfg->plain_len) != 0) {
                 fprintf(stderr, "Invalid --size value\n");
                 return -1;
             }
 
-        } else if (strcmp(argv[i], "--iters") == 0 && (i + 1) < argc) {
+        } else if (strcmp(argv[i], "--iters") == 0 &&
+                   (i + 1) < argc) {
             if (parse_size_value(argv[++i], &cfg->iters) != 0) {
                 fprintf(stderr, "Invalid --iters value\n");
                 return -1;
             }
 
-        } else if (strcmp(argv[i], "--decrypt-mode") == 0 && (i + 1) < argc) {
+        } else if (strcmp(argv[i], "--decrypt-mode") == 0 &&
+                   (i + 1) < argc) {
             if (parse_decrypt_mode(argv[++i], &cfg->decrypt_mode) != 0) {
                 fprintf(stderr, "Invalid --decrypt-mode value\n");
                 return -1;
             }
 
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+        } else if (strcmp(argv[i], "--help") == 0 ||
+                   strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 1;
 
@@ -556,12 +578,14 @@ static int alloc_unpad_if_needed(
     return DVCO_CP_OK;
 }
 
-static int alloc_via_provider_2call(
+static int alloc_via_provider_2call
+(
     int (*fn)(dvco_cipher_ctx_t *, dvco_buf_t *),
     dvco_cipher_ctx_t *ctx,
     uint8_t **out_buf,
     size_t *out_len
-) {
+) 
+{
     dvco_buf_t b;
     int rc;
 
@@ -602,18 +626,30 @@ static int alloc_via_provider_2call(
     return DVCO_CP_OK;
 }
 
-static int alloc_encrypt_2call(
+static int alloc_encrypt_2call
+(
     const dvco_cipher_provider_api_t *api,
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t **out_buf,
     size_t *out_len
-) {
+) 
+{
     dvco_buf_t b;
     int rc;
 
-    if (api == NULL || api->encrypt == NULL || ctx == NULL || out_buf == NULL || out_len == NULL) {
+    if (
+        api == NULL || 
+        api->encrypt == NULL || 
+        ctx == NULL || 
+        out_buf == NULL || 
+        out_len == NULL ||
+        (aad == NULL && aad_len > 0u)
+    ) 
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -624,7 +660,7 @@ static int alloc_encrypt_2call(
     b.len = 0u;
     b.cap = 0u;
 
-    rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->encrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         return rc;
     }
@@ -639,7 +675,7 @@ static int alloc_encrypt_2call(
     }
     b.cap = b.len;
 
-    rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->encrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         free(b.data);
         return rc;
@@ -650,18 +686,30 @@ static int alloc_encrypt_2call(
     return DVCO_CP_OK;
 }
 
-static int alloc_decrypt_2call(
+static int alloc_decrypt_2call
+(
     const dvco_cipher_provider_api_t *api,
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad,
+    size_t aad_len,    
     uint8_t **out_buf,
     size_t *out_len
-) {
+) 
+{
     dvco_buf_t b;
     int rc;
 
-    if (api == NULL || api->decrypt == NULL || ctx == NULL || out_buf == NULL || out_len == NULL) {
+    if (
+        api == NULL || 
+        api->decrypt == NULL || 
+        ctx == NULL || 
+        out_buf == NULL || 
+        out_len == NULL ||
+        (aad == NULL && aad_len > 0u)
+        ) 
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -672,7 +720,7 @@ static int alloc_decrypt_2call(
     b.len = 0u;
     b.cap = 0u;
 
-    rc = api->decrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->decrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         return rc;
     }
@@ -687,7 +735,7 @@ static int alloc_decrypt_2call(
     }
     b.cap = b.len;
 
-    rc = api->decrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->decrypt(ctx, in_data, in_len, aad, aad_len, &b);
     if (rc != DVCO_CP_OK) {
         free(b.data);
         return rc;
@@ -698,16 +746,20 @@ static int alloc_decrypt_2call(
     return DVCO_CP_OK;
 }
 
-static int run_encrypt_bench(
+static int run_encrypt_bench
+(
     const dvco_cipher_provider_api_t *api,
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *cipher_buf,
     size_t cipher_cap,
     size_t iters,
     bench_result_t *res
-) {
+)
+{
     struct timespec t0;
     struct timespec t1;
     dvco_buf_t out;
@@ -716,7 +768,16 @@ static int run_encrypt_bench(
     double seconds;
     double total_bytes;
 
-    if (api == NULL || api->encrypt == NULL || ctx == NULL || in_data == NULL || cipher_buf == NULL || res == NULL) {
+    if (
+        api == NULL ||
+        api->encrypt == NULL ||
+        ctx == NULL ||
+        in_data == NULL ||
+        cipher_buf == NULL ||
+        res == NULL ||
+        (aad == NULL && aad_len > 0u)
+    )
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -730,7 +791,16 @@ static int run_encrypt_bench(
         out.len = cipher_cap;
         out.cap = cipher_cap;
 
-        rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &out);
+        rc = api->encrypt
+        (
+            ctx,
+            in_data,
+            in_len,
+            aad,
+            aad_len,
+            &out
+        );
+
         if (rc != DVCO_CP_OK) {
             return rc;
         }
@@ -753,7 +823,10 @@ static int run_encrypt_bench(
     return DVCO_CP_OK;
 }
 
-static int run_decrypt_reuse_bench(
+
+
+static int run_decrypt_reuse_bench
+(
     const dvco_cipher_provider_api_t *api,
     const dvco_kv_t *cfg_items,
     size_t cfg_count,
@@ -761,12 +834,15 @@ static int run_decrypt_reuse_bench(
     size_t shareable_len,
     const uint8_t *cipher_data,
     size_t cipher_len,
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *plain_buf,
     size_t plain_cap,
     size_t measured_plain_len,
     size_t iters,
     bench_result_t *res
-) {
+)
+{
     struct timespec t0;
     struct timespec t1;
     dvco_cipher_ctx_t *ctx = NULL;
@@ -776,7 +852,8 @@ static int run_decrypt_reuse_bench(
     double seconds;
     double total_bytes;
 
-    if (api == NULL ||
+    if (
+        api == NULL ||
         api->create == NULL ||
         api->destroy == NULL ||
         api->deserialize_shareable == NULL ||
@@ -784,7 +861,10 @@ static int run_decrypt_reuse_bench(
         shareable == NULL ||
         cipher_data == NULL ||
         plain_buf == NULL ||
-        res == NULL) {
+        res == NULL ||
+        (aad == NULL && aad_len > 0u)
+    )
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -813,7 +893,16 @@ static int run_decrypt_reuse_bench(
         out.len = plain_cap;
         out.cap = plain_cap;
 
-        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+        rc = api->decrypt
+        (
+            ctx,
+            cipher_data,
+            cipher_len,
+            aad,
+            aad_len,
+            &out
+        );
+
         if (rc != DVCO_CP_OK) {
             api->destroy(ctx);
             return rc;
@@ -840,7 +929,9 @@ static int run_decrypt_reuse_bench(
     return DVCO_CP_OK;
 }
 
-static int run_decrypt_cycle_bench(
+
+static int run_decrypt_cycle_bench
+(
     const dvco_cipher_provider_api_t *api,
     const dvco_kv_t *cfg_items,
     size_t cfg_count,
@@ -848,12 +939,15 @@ static int run_decrypt_cycle_bench(
     size_t shareable_len,
     const uint8_t *cipher_data,
     size_t cipher_len,
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *plain_buf,
     size_t plain_cap,
     size_t measured_plain_len,
     size_t iters,
     bench_result_t *res
-) {
+)
+{
     struct timespec t0;
     struct timespec t1;
     dvco_buf_t out;
@@ -862,7 +956,8 @@ static int run_decrypt_cycle_bench(
     double seconds;
     double total_bytes;
 
-    if (api == NULL ||
+    if (
+        api == NULL ||
         api->create == NULL ||
         api->destroy == NULL ||
         api->deserialize_shareable == NULL ||
@@ -870,7 +965,10 @@ static int run_decrypt_cycle_bench(
         shareable == NULL ||
         cipher_data == NULL ||
         plain_buf == NULL ||
-        res == NULL) {
+        res == NULL ||
+        (aad == NULL && aad_len > 0u)
+    )
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -900,7 +998,15 @@ static int run_decrypt_cycle_bench(
         out.len = plain_cap;
         out.cap = plain_cap;
 
-        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+        rc = api->decrypt
+        (
+            ctx,
+            cipher_data,
+            cipher_len,
+            aad,
+            aad_len,
+            &out
+        );
 
         api->destroy(ctx);
 
@@ -927,7 +1033,9 @@ static int run_decrypt_cycle_bench(
 }
 
 
-static int run_decrypt_private_reuse_bench(
+
+static int run_decrypt_private_reuse_bench
+(
     const dvco_cipher_provider_api_t *api,
     const dvco_kv_t *cfg_items,
     size_t cfg_count,
@@ -935,12 +1043,15 @@ static int run_decrypt_private_reuse_bench(
     size_t private_blob_len,
     const uint8_t *cipher_data,
     size_t cipher_len,
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *plain_buf,
     size_t plain_cap,
     size_t measured_plain_len,
     size_t iters,
     bench_result_t *res
-) {
+)
+{
     struct timespec t0;
     struct timespec t1;
     dvco_cipher_ctx_t *ctx = NULL;
@@ -950,7 +1061,8 @@ static int run_decrypt_private_reuse_bench(
     double seconds;
     double total_bytes;
 
-    if (api == NULL ||
+    if (
+        api == NULL ||
         api->create == NULL ||
         api->destroy == NULL ||
         api->deserialize_private == NULL ||
@@ -958,7 +1070,10 @@ static int run_decrypt_private_reuse_bench(
         private_blob == NULL ||
         cipher_data == NULL ||
         plain_buf == NULL ||
-        res == NULL) {
+        res == NULL ||
+        (aad == NULL && aad_len > 0u)
+    )
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -987,7 +1102,15 @@ static int run_decrypt_private_reuse_bench(
         out.len = plain_cap;
         out.cap = plain_cap;
 
-        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+        rc = api->decrypt(
+            ctx,
+            cipher_data,
+            cipher_len,
+            aad,
+            aad_len,
+            &out
+        );
+
         if (rc != DVCO_CP_OK) {
             api->destroy(ctx);
             return rc;
@@ -1014,7 +1137,9 @@ static int run_decrypt_private_reuse_bench(
     return DVCO_CP_OK;
 }
 
-static int run_decrypt_private_cycle_bench(
+
+static int run_decrypt_private_cycle_bench
+(
     const dvco_cipher_provider_api_t *api,
     const dvco_kv_t *cfg_items,
     size_t cfg_count,
@@ -1022,12 +1147,15 @@ static int run_decrypt_private_cycle_bench(
     size_t private_blob_len,
     const uint8_t *cipher_data,
     size_t cipher_len,
+    const uint8_t *aad,
+    size_t aad_len,
     uint8_t *plain_buf,
     size_t plain_cap,
     size_t measured_plain_len,
     size_t iters,
     bench_result_t *res
-) {
+)
+{
     struct timespec t0;
     struct timespec t1;
     dvco_buf_t out;
@@ -1036,7 +1164,8 @@ static int run_decrypt_private_cycle_bench(
     double seconds;
     double total_bytes;
 
-    if (api == NULL ||
+    if (
+        api == NULL ||
         api->create == NULL ||
         api->destroy == NULL ||
         api->deserialize_private == NULL ||
@@ -1044,7 +1173,10 @@ static int run_decrypt_private_cycle_bench(
         private_blob == NULL ||
         cipher_data == NULL ||
         plain_buf == NULL ||
-        res == NULL) {
+        res == NULL ||
+        (aad == NULL && aad_len > 0u)
+    )
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -1074,7 +1206,15 @@ static int run_decrypt_private_cycle_bench(
         out.len = plain_cap;
         out.cap = plain_cap;
 
-        rc = api->decrypt(ctx, cipher_data, cipher_len, NULL, 0u, &out);
+        rc = api->decrypt
+        (
+            ctx,
+            cipher_data,
+            cipher_len,
+            aad,
+            aad_len,
+            &out
+        );
 
         api->destroy(ctx);
 
@@ -1100,13 +1240,15 @@ static int run_decrypt_private_cycle_bench(
     return DVCO_CP_OK;
 }
 
-static void print_results(
+static void print_results
+(
     const app_cfg_t *cfg,
     const dvco_cipher_provider_info_t *info,
     size_t encrypt_input_len,
     size_t ciphertext_len,
     const bench_result_t *res
-) {
+) 
+{
     printf("provider              : %s\n", info->provider_name ? info->provider_name : "(null)");
     printf("version               : %s\n", info->provider_version ? info->provider_version : "(null)");
     printf("cid                   : %u\n", (unsigned)info->cid);
@@ -1121,6 +1263,14 @@ static void print_results(
     printf("cleartext size        : %zu bytes\n", cfg->plain_len);
     printf("encrypt input size    : %zu bytes\n", encrypt_input_len);
     printf("ciphertext size       : %zu bytes\n", ciphertext_len);
+    
+    if (cfg->aad != NULL)
+    {
+        printf("aad                   : %s (%zu bytes)\n",
+            cfg->aad,
+            strlen(cfg->aad));
+    }
+
     printf("iterations            : %zu\n", cfg->iters);
     printf("decrypt mode          : %s\n", decrypt_mode_to_string(cfg->decrypt_mode));
     printf("\n");
@@ -1180,6 +1330,9 @@ int main(int argc, char **argv) {
     size_t decrypted_cmp_len = 0u;
     size_t bench_decrypt_cap = 0u;
 
+    const uint8_t *aad_bytes = NULL;
+    size_t aad_len = 0u;
+
     bench_result_t res;
     uint16_t main_category;
     int rc;
@@ -1197,6 +1350,12 @@ int main(int argc, char **argv) {
     if (rc != DVCO_CP_OK) {
         fprintf(stderr, "Invalid confstring: %s\n", cfg.confstring ? cfg.confstring : "(null)");
         goto done;
+    }
+
+    if (cfg.aad != NULL) 
+    {
+        aad_bytes = (const uint8_t *)cfg.aad;
+        aad_len = strlen(cfg.aad);
     }
 
     plain = (uint8_t *)malloc(cfg.plain_len > 0u ? cfg.plain_len : 1u);
@@ -1328,13 +1487,13 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    rc = alloc_encrypt_2call(api, ctx_bench_enc, encrypt_input, encrypt_input_len, &ciphertext_ref, &ciphertext_ref_len);
+    rc = alloc_encrypt_2call(api, ctx_bench_enc, encrypt_input, encrypt_input_len, aad_bytes, aad_len, &ciphertext_ref, &ciphertext_ref_len);
     if (rc != DVCO_CP_OK) {
         print_provider_op_error("encrypt(correctness)", rc, api, ctx_bench_enc);
         goto done;
     }
 
-    rc = alloc_decrypt_2call(api, ctx_dec_check, ciphertext_ref, ciphertext_ref_len, &decrypted_raw, &decrypted_raw_len);
+    rc = alloc_decrypt_2call(api, ctx_dec_check, ciphertext_ref, ciphertext_ref_len, aad_bytes, aad_len, &decrypted_raw, &decrypted_raw_len);
     if (rc != DVCO_CP_OK) {
         print_provider_op_error("decrypt(correctness)", rc, api, ctx_dec_check);
         goto done;
@@ -1375,11 +1534,14 @@ int main(int argc, char **argv) {
         ctx_bench_enc,
         encrypt_input,
         encrypt_input_len,
+        aad_bytes,
+        aad_len,
         ciphertext_work,
         ciphertext_work_cap,
         cfg.iters,
         &res
     );
+
     if (rc != DVCO_CP_OK) {
         print_provider_op_error("encrypt benchmark", rc, api, ctx_bench_enc);
         goto done;
@@ -1395,6 +1557,8 @@ int main(int argc, char **argv) {
                 shareable_len,
                 ciphertext_ref,
                 ciphertext_ref_len,
+                aad_bytes,
+                aad_len,
                 bench_decrypt_buf,
                 bench_decrypt_cap,
                 encrypt_input_len,
@@ -1410,6 +1574,8 @@ int main(int argc, char **argv) {
                 shareable_len,
                 ciphertext_ref,
                 ciphertext_ref_len,
+                aad_bytes,
+                aad_len,
                 bench_decrypt_buf,
                 bench_decrypt_cap,
                 encrypt_input_len,
@@ -1427,6 +1593,8 @@ int main(int argc, char **argv) {
                 private_blob_len,
                 ciphertext_ref,
                 ciphertext_ref_len,
+                aad_bytes,
+                aad_len,
                 bench_decrypt_buf,
                 bench_decrypt_cap,
                 encrypt_input_len,
@@ -1442,6 +1610,8 @@ int main(int argc, char **argv) {
                 private_blob_len,
                 ciphertext_ref,
                 ciphertext_ref_len,
+                aad_bytes,
+                aad_len,
                 bench_decrypt_buf,
                 bench_decrypt_cap,
                 encrypt_input_len,

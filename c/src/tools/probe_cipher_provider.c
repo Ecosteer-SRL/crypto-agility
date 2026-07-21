@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
+// ver: 1.1
 
 /*
-    vector_cipher_provider.c
+    probe_cipher_provider.c
     Minimal deterministic provider-vector tool.
 
     Purpose
@@ -17,6 +18,9 @@
     This tool intentionally does not call reset() or rotate().
     The caller-provided confstring is the source of truth for the key.
  */
+
+//  ver 1.1     21/07/2026
+//  added AEAD AAD support (--aad)
 
 #include "ciphers/cipher_provider.h"
 #include "padding/dvco_padding.h"
@@ -36,6 +40,7 @@ typedef struct app_cfg_s {
     const char *lib_path;
     const char *confstring;
     const char *plain;
+    const char *aad;
 } app_cfg_t;
 
 typedef struct kv_list_s {
@@ -109,16 +114,19 @@ static void usage(const char *prog)
     (
         stderr,
         "Usage:\n"
-        "  %s --lib <provider.so> --confstring \"k1=v1;k2=v2\" --plain <text>\n"
+        "  %s --lib <provider.so> --confstring \"k1=v1;k2=v2\" "
+        "--plain <text> [--aad <text>]\n"
         "\n"
         "Example:\n"
         "  %s --lib ../../build/debug/lib/libaes_gcm_provider.so \\\n"
         "     --confstring \"keybits=128;key=0x00112233445566778899AABBCCDDEEFF\" \\\n"
-        "     --plain \"hello dvco running on psoc\"\n",
+        "     --plain \"hello dvco running on psoc\" \\\n"
+        "     --aad \"product-123\"\n",
         prog,
         prog
     );
 }
+
 
 static int parse_args(int argc, char **argv, app_cfg_t *cfg)
 {
@@ -139,6 +147,8 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg)
             cfg->confstring = argv[++i];
         } else if(strcmp(argv[i], "--plain") == 0 && (i + 1) < argc) {
             cfg->plain = argv[++i];
+        } else if(strcmp(argv[i], "--aad") == 0 && (i + 1) < argc) {
+            cfg->aad = argv[++i];
         } else if(strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 1;
@@ -157,6 +167,7 @@ static int parse_args(int argc, char **argv, app_cfg_t *cfg)
 
     return 0;
 }
+
 
 static char *trim_inplace(char *s)
 {
@@ -379,6 +390,8 @@ static int alloc_encrypt_2call
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad_bytes,
+    size_t aad_len,    
     uint8_t **out_buf,
     size_t *out_len
 )
@@ -386,7 +399,15 @@ static int alloc_encrypt_2call
     dvco_buf_t b;
     int rc;
 
-    if(api == NULL || api->encrypt == NULL || ctx == NULL || out_buf == NULL || out_len == NULL) {
+    if(
+        api == NULL || 
+        api->encrypt == NULL || 
+        ctx == NULL || 
+        out_buf == NULL || 
+        out_len == NULL ||
+        (aad_bytes == NULL && aad_len > 0u)
+        ) 
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -397,7 +418,7 @@ static int alloc_encrypt_2call
     b.len = 0u;
     b.cap = 0u;
 
-    rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->encrypt(ctx, in_data, in_len, aad_bytes, aad_len, &b);
     if(rc != DVCO_CP_OK) {
         return rc;
     }
@@ -412,7 +433,7 @@ static int alloc_encrypt_2call
     }
     b.cap = b.len;
 
-    rc = api->encrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->encrypt(ctx, in_data, in_len, aad_bytes, aad_len, &b);
     if(rc != DVCO_CP_OK) {
         free(b.data);
         return rc;
@@ -429,6 +450,8 @@ static int alloc_decrypt_2call
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
+    const uint8_t *aad_bytes,
+    size_t aad_len,    
     uint8_t **out_buf,
     size_t *out_len
 )
@@ -436,7 +459,15 @@ static int alloc_decrypt_2call
     dvco_buf_t b;
     int rc;
 
-    if(api == NULL || api->decrypt == NULL || ctx == NULL || out_buf == NULL || out_len == NULL) {
+    if(
+        api == NULL || 
+        api->decrypt == NULL || 
+        ctx == NULL || 
+        out_buf == NULL || 
+        out_len == NULL || 
+        (aad_bytes == NULL && aad_len > 0u)
+    ) 
+    {
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
@@ -447,7 +478,7 @@ static int alloc_decrypt_2call
     b.len = 0u;
     b.cap = 0u;
 
-    rc = api->decrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->decrypt(ctx, in_data, in_len, aad_bytes, aad_len, &b);
     if(rc != DVCO_CP_OK) {
         return rc;
     }
@@ -462,7 +493,7 @@ static int alloc_decrypt_2call
     }
     b.cap = b.len;
 
-    rc = api->decrypt(ctx, in_data, in_len, NULL, 0u, &b);
+    rc = api->decrypt(ctx, in_data, in_len, aad_bytes, aad_len, &b);
     if(rc != DVCO_CP_OK) {
         free(b.data);
         return rc;
@@ -473,13 +504,15 @@ static int alloc_decrypt_2call
     return DVCO_CP_OK;
 }
 
-static int run_vector
+static int run_probe
 (
     const dvco_cipher_provider_api_t *api,
     const dvco_cipher_provider_info_t *info,
     const kv_list_t *kv,
     const uint8_t *plain,
     size_t plain_len,
+    const uint8_t *aad_bytes,
+    size_t aad_len,    
     const char *plain_text
 )
 {
@@ -502,7 +535,7 @@ static int run_vector
     int rc;
     int result = 1;
 
-    if(api == NULL || info == NULL || kv == NULL || plain == NULL)
+    if(api == NULL || info == NULL || kv == NULL || plain == NULL || plain_text == NULL || (aad_bytes == NULL && aad_len > 0u))
     {
         return 1;
     }
@@ -515,9 +548,34 @@ static int run_vector
         goto done;
     }
 
+    if(kv->count == 0u)
+    {
+        rc = api->rotate(ctx_enc);
+        print_rc("rotate(ctx_enc)", rc);
+        if(rc != DVCO_CP_OK)
+        {
+            print_provider_last_error(api, ctx_enc);
+            goto done;
+        }
+    }    
+
+
+
     printf("plaintext: \"%s\" (%zu bytes)\n", plain_text, plain_len);
     dump_hex("plain", plain, plain_len);
     dump_b64("plain", plain, plain_len);
+
+    if(aad_bytes != NULL)
+    {
+        printf("aad: \"%.*s\" (%zu bytes)\n",
+            (int)aad_len,
+            (const char *)aad_bytes,
+            aad_len
+        );
+
+        dump_hex("aad", aad_bytes, aad_len);
+        dump_b64("aad", aad_bytes, aad_len);
+    }    
 
     if(info->pad_apply)
     {
@@ -596,7 +654,7 @@ static int run_vector
     dump_hex("shareable", shareable, shareable_len);
     dump_b64("shareable", shareable, shareable_len);
 
-    rc = alloc_encrypt_2call(api, ctx_enc, cipher_input, cipher_input_len, &ciphertext, &ciphertext_len);
+    rc = alloc_encrypt_2call(api, ctx_enc, cipher_input, cipher_input_len, aad_bytes, aad_len, &ciphertext, &ciphertext_len);
     print_rc("encrypt(ctx_enc)", rc);
     if(rc != DVCO_CP_OK)
     {
@@ -615,6 +673,7 @@ static int run_vector
         goto done;
     }
 
+
     rc = api->deserialize_shareable(ctx_dec, shareable, shareable_len);
     print_rc("deserialize_shareable(ctx_dec)", rc);
     if(rc != DVCO_CP_OK)
@@ -623,7 +682,7 @@ static int run_vector
         goto done;
     }
 
-    rc = alloc_decrypt_2call(api, ctx_dec, ciphertext, ciphertext_len, &decrypted, &decrypted_len);
+    rc = alloc_decrypt_2call(api, ctx_dec, ciphertext, ciphertext_len, aad_bytes, aad_len, &decrypted, &decrypted_len);
     print_rc("decrypt(ctx_dec)", rc);
     if(rc != DVCO_CP_OK)
     {
@@ -706,6 +765,13 @@ static int run_vector
     }
     printf("\n");
 
+    printf("summary.aad_hex=");
+    for(size_t i = 0u; i < aad_len; i++)
+    {
+        printf("%02X", aad_bytes[i]);
+    }
+    printf("\n");    
+
     result = 0;
 
 done:
@@ -741,6 +807,8 @@ int main(int argc, char **argv)
     size_t plain_len;
     int rc;
     int exit_code = 1;
+    const uint8_t *aad_bytes = NULL;
+    size_t aad_len = 0u;
 
     memset(&info, 0, sizeof(info));
 
@@ -755,6 +823,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "Invalid confstring: %s\n", cfg.confstring ? cfg.confstring : "(null)");
         goto done;
     }
+
+    if (cfg.aad != NULL)
+    {
+        aad_bytes = (const uint8_t *)cfg.aad;
+        aad_len = strlen(cfg.aad);
+    }    
 
     plain_bytes = (const uint8_t *)cfg.plain;
     plain_len = strlen(cfg.plain);
@@ -781,13 +855,14 @@ int main(int argc, char **argv)
 
     if(api->get_info == NULL ||
        api->create == NULL ||
+       api->rotate == NULL ||
        api->destroy == NULL ||
        api->serialize_shareable == NULL ||
        api->deserialize_shareable == NULL ||
        api->encrypt == NULL ||
        api->decrypt == NULL ||
        api->last_error == NULL) {
-        fprintf(stderr, "Provider API is incomplete for vector test\n");
+        fprintf(stderr, "Provider API is incomplete for probe\n");
         goto done;
     }
 
@@ -805,9 +880,9 @@ int main(int argc, char **argv)
     printf("  pad_apply      : %s\n", info.pad_apply ? "true" : "false");
     printf("  pad_block_size : %zu\n", info.pad_block_size);
 
-    exit_code = run_vector(api, &info, &kv, plain_bytes, plain_len, cfg.plain);
+    exit_code = run_probe(api, &info, &kv, plain_bytes, plain_len, aad_bytes, aad_len, cfg.plain);
     if(exit_code == 0) {
-        printf("[PASS] Vector provider test completed successfully.\n");
+        printf("[PASS] Provider probe completed successfully.\n");
     }
 
 done:
