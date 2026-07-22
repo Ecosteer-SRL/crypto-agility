@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
 
 
 // conf:
@@ -11,7 +11,10 @@
 //   - unsupported keys => error
 //   - if key is omitted, rotate() must generate the runtime key
 //   - nonce is generated internally per encrypt()
-//   - AAD not supported
+
+//  ver 1.1     22/07/2026
+//  added AAD support
+
 
 #include "ciphers/cipher_provider.h"
 #define DVCO_CIPHER_ID  6u
@@ -30,7 +33,7 @@
 // --------------------------------------------------------------------------
 
 #define DVCO_ASCON_PROVIDER_NAME        "ascon-aead128"
-#define DVCO_ASCON_PROVIDER_VERSION     "1.0"
+#define DVCO_ASCON_PROVIDER_VERSION     "1.1"
 #define DVCO_ASCON_PROVIDER_DESC        "DVCO Ascon-AEAD128 cipher provider (NIST SP 800-232, vendored CC0 ref core)"
 
 #define DVCO_ASCON_KEY_LEN              ((size_t)CRYPTO_KEYBYTES)    // 16
@@ -453,14 +456,16 @@ static int ascon_compare_private(
     return ascon_compare_shareable(ctx, blob, blob_len);
 }
 
-static int ascon_encrypt(
+static int ascon_encrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     ascon_cipher_ctx_t *a = ascon_ctx_from_opaque(ctx);
     uint8_t nonce[DVCO_ASCON_NONCE_LEN];
     unsigned long long clen = 0u;
@@ -482,9 +487,17 @@ static int ascon_encrypt(
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        ascon_set_error(a, "AAD not supported by Ascon-AEAD128 provider v1");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (in_len > (SIZE_MAX - 1u - DVCO_ASCON_NONCE_LEN - DVCO_ASCON_TAG_LEN))
+    {
+        // Prevent size_t overflow when calculating the framed output length.
+        ascon_set_error(a, "plaintext length causes output-size overflow");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
+
+    if (aad == NULL && aad_len > 0u)
+    {
+        ascon_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
     // Provider-owned frame:
@@ -501,6 +514,8 @@ static int ascon_encrypt(
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
+    out->len = 0u;    
+
     if (RAND_bytes(nonce, (int)sizeof(nonce)) != 1) {
         ascon_set_error(a, "RAND_bytes failed");
         return DVCO_CP_ERR_CRYPTO;
@@ -510,13 +525,16 @@ static int ascon_encrypt(
     memcpy(&out->data[1], nonce, DVCO_ASCON_NONCE_LEN);
     ct_off = 1u + DVCO_ASCON_NONCE_LEN;
 
-    rc = crypto_aead_encrypt(
+    
+
+    rc = crypto_aead_encrypt
+    (
         &out->data[ct_off],
         &clen,
         in_data,
         (unsigned long long)in_len,
-        NULL,
-        0u,
+        aad,
+        (unsigned long long)aad_len,        
         NULL,
         nonce,
         a->key
@@ -538,14 +556,16 @@ static int ascon_encrypt(
     return DVCO_CP_OK;
 }
 
-static int ascon_decrypt(
+static int ascon_decrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     ascon_cipher_ctx_t *a = ascon_ctx_from_opaque(ctx);
     uint8_t nonce_len;
     const uint8_t *nonce;
@@ -569,9 +589,10 @@ static int ascon_decrypt(
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        ascon_set_error(a, "AAD not supported by Ascon-AEAD128 provider v1");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (aad == NULL && aad_len > 0u)
+    {
+        ascon_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
 
     if (in_len < (1u + DVCO_ASCON_NONCE_LEN + DVCO_ASCON_TAG_LEN)) {
@@ -606,24 +627,32 @@ static int ascon_decrypt(
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
+    out->len = 0u;
+
     rc = crypto_aead_decrypt(
         out->data,
         &mlen,
         NULL,
         ct_and_tag,
         (unsigned long long)ct_and_tag_len,
-        NULL,
-        0u,
+        aad,
+        (unsigned long long)aad_len,
         nonce,
         a->key
     );
 
-    if (rc != 0) {
+    if (rc != 0)
+    {
+        ascon_secure_zero(out->data, needed);
+        out->len = 0u;
         ascon_set_error(a, "Ascon-AEAD128 authentication failed");
         return DVCO_CP_ERR_CRYPTO;
     }
 
-    if (mlen != (unsigned long long)needed) {
+    if (mlen != (unsigned long long)needed)
+    {
+        ascon_secure_zero(out->data, needed);
+        out->len = 0u;
         ascon_set_error(a, "unexpected Ascon-AEAD128 plaintext length");
         return DVCO_CP_ERR_CRYPTO;
     }
