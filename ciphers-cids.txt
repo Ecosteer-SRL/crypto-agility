@@ -9,7 +9,7 @@ AES-CTR                 symmetric       3u
 CHACHA20-POLY1305       symmetric       4u		X
 AES-GCM                 symmetric       5u		X
 ASCON-AEAD128           symmetric       6u		X
-AES-CCM                 symmetric       7u
+AES-CCM                 symmetric       7u		X
 AES-XTS                 symmetric       8u
 
 RSA-OAEP                asymmetric      4096u

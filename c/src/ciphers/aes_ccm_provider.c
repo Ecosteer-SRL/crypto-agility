@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
 
 
 // conf:
@@ -12,7 +12,10 @@
 //   - unsupported keys => error
 //   - if key is omitted, rotate() must generate the runtime key
 //   - nonce is generated internally per encrypt()
-//   - AAD not supported
+
+//  ver 1.1     21/07/2026
+//  added AEAD aad support
+
 
 #include "ciphers/cipher_provider.h"
 #define DVCO_CIPHER_ID  7u
@@ -30,7 +33,7 @@
 // --------------------------------------------------------------------------
 
 #define DVCO_AESCCM_PROVIDER_NAME        "aes-ccm"
-#define DVCO_AESCCM_PROVIDER_VERSION     "1.0"
+#define DVCO_AESCCM_PROVIDER_VERSION     "1.1"
 #define DVCO_AESCCM_PROVIDER_DESC        "DVCO AES-CCM cipher provider"
 
 #define DVCO_AESCCM_BLOCK_SIZE           1u
@@ -38,6 +41,10 @@
 #define DVCO_AESCCM_TAG_LEN              16u
 #define DVCO_AESCCM_KEY_LEN_DEFAULT      32u   // default = AES-256
 #define DVCO_AESCCM_SHAREABLE_HDR_LEN    2u    // [key_len_be:2][key:key_len]
+
+// With a 12-byte CCM nonce, the message-length field is 3 bytes,
+// limiting each plaintext or ciphertext to 2^24 - 1 bytes.
+#define DVCO_AESCCM_MAX_MESSAGE_LEN ((size_t)0xFFFFFFu)
 
 // --------------------------------------------------------------------------
 // Opaque ctx implementation
@@ -546,14 +553,16 @@ static int aesccm_compare_private(
     return aesccm_compare_shareable(ctx, blob, blob_len);
 }
 
-static int aesccm_encrypt(
+static int aesccm_encrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     aesccm_cipher_ctx_t *a = aesccm_ctx_from_opaque(ctx);
     const EVP_CIPHER *cipher;
     EVP_CIPHER_CTX *evp = NULL;
@@ -565,6 +574,11 @@ static int aesccm_encrypt(
     int outl1 = 0;
     int outl2 = 0;
     int rc = DVCO_CP_ERR_CRYPTO;
+    int aad_outl = 0;
+    uint8_t empty_payload = 0u;
+    const uint8_t *payload;
+
+
 
     if (a == NULL || out == NULL) {
         return DVCO_CP_ERR_INVALID_ARG;
@@ -580,15 +594,24 @@ static int aesccm_encrypt(
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        aesccm_set_error(a, "AAD not supported by AES-CCM provider v1");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
-    }
+    if (in_len > DVCO_AESCCM_MAX_MESSAGE_LEN)
+    {
+        aesccm_set_error(a, "plaintext exceeds AES-CCM nonce-dependent limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
 
-    if (in_len > (size_t)INT_MAX) {
-        aesccm_set_error(a, "plaintext too large for OpenSSL EVP CCM API");
+    if (aad == NULL && aad_len > 0u)
+    {
+        aesccm_set_error(a, "AAD is NULL with non-zero length");
         return DVCO_CP_ERR_INVALID_ARG;
     }
+
+    if (aad_len > (size_t)INT_MAX || in_len > (size_t)INT_MAX)
+    {
+        aesccm_set_error(a, "AAD or plaintext length exceeds OpenSSL limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
+
 
     cipher = aesccm_select_evp_cipher(a);
     if (cipher == NULL) {
@@ -610,11 +633,14 @@ static int aesccm_encrypt(
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
 
+    out->len = 0u;
+
     if (RAND_bytes(nonce, (int)sizeof(nonce)) != 1) {
         aesccm_set_error(a, "RAND_bytes failed");
         return DVCO_CP_ERR_CRYPTO;
     }
 
+    // Allocate the OpenSSL cipher context and fail cleanly if allocation fails.
     evp = EVP_CIPHER_CTX_new();
     if (evp == NULL) {
         aesccm_set_error(a, "EVP_CIPHER_CTX_new failed");
@@ -622,47 +648,75 @@ static int aesccm_encrypt(
         return DVCO_CP_ERR_ALLOC;
     }
 
+    // Initialize the AES-CCM cipher context without installing the key or nonce yet.
     if (EVP_EncryptInit_ex(evp, cipher, NULL, NULL, NULL) != 1) {
         aesccm_set_error(a, "EVP_EncryptInit_ex failed");
         goto done;
     }
 
+    // Configure the AES-CCM nonce length before installing the key and nonce.
     if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_CCM_SET_IVLEN, (int)DVCO_AESCCM_NONCE_LEN, NULL) != 1) {
         aesccm_set_error(a, "EVP_CTRL_CCM_SET_IVLEN failed");
         goto done;
     }
 
+    // Configure the AES-CCM authentication tag length before installing the key and nonce.
     if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_CCM_SET_TAG, (int)DVCO_AESCCM_TAG_LEN, NULL) != 1) {
         aesccm_set_error(a, "EVP_CTRL_CCM_SET_TAG failed");
         goto done;
     }
 
+    // Install the AES key and nonce into the configured CCM context.
     if (EVP_EncryptInit_ex(evp, NULL, NULL, a->key, nonce) != 1) {
         aesccm_set_error(a, "EVP_EncryptInit_ex key/nonce failed");
         goto done;
     }
 
     // CCM-specific requirement:
-    // OpenSSL must receive the total plaintext length before payload bytes.
+    // CCM requires the complete plaintext length before processing AAD or payload.
+    // With input and output set to NULL, this call declares the length only.    
     if (EVP_EncryptUpdate(evp, NULL, &tmp_len, NULL, (int)in_len) != 1) {
         aesccm_set_error(a, "EVP_EncryptUpdate length declaration failed");
         goto done;
     }
 
+    if (aad_len > 0u)
+    {
+        // Authenticate the AAD without producing ciphertext output.
+        if (EVP_EncryptUpdate(
+                evp,
+                NULL,
+                &aad_outl,
+                aad,
+                (int)aad_len
+            ) != 1)
+        {
+            aesccm_set_error(a, "EVP_EncryptUpdate(AAD) failed");
+            goto done;
+        }
+    }    
+
     out->data[0] = (uint8_t)DVCO_AESCCM_NONCE_LEN;
     memcpy(&out->data[1], nonce, DVCO_AESCCM_NONCE_LEN);
     ct_off = 1u + DVCO_AESCCM_NONCE_LEN;
 
+    payload = (in_data != NULL) ? in_data : &empty_payload;
+
+    // Encrypt the plaintext payload and write the ciphertext into the output frame.
     if (EVP_EncryptUpdate(
             evp,
             &out->data[ct_off],
             &outl1,
-            in_data,
-            (int)in_len) != 1) {
+            payload,
+            (int)in_len
+        ) != 1)
+    {
         aesccm_set_error(a, "EVP_EncryptUpdate failed");
         goto done;
     }
 
+
+    // Finalize AES-CCM encryption and write any remaining ciphertext bytes.
     if (EVP_EncryptFinal_ex(
             evp,
             &out->data[ct_off + (size_t)outl1],
@@ -689,14 +743,16 @@ static int aesccm_encrypt(
     return rc;
 }
 
-static int aesccm_decrypt(
+static int aesccm_decrypt
+(
     dvco_cipher_ctx_t *ctx,
     const uint8_t *in_data,
     size_t in_len,
     const uint8_t *aad,
     size_t aad_len,
     dvco_buf_t *out
-) {
+) 
+{
     aesccm_cipher_ctx_t *a = aesccm_ctx_from_opaque(ctx);
     const EVP_CIPHER *cipher;
     EVP_CIPHER_CTX *evp = NULL;
@@ -710,6 +766,7 @@ static int aesccm_decrypt(
     int outl1 = 0;
     int outl2 = 0;
     int rc = DVCO_CP_ERR_CRYPTO;
+    int aad_outl = 0;
 
     if (a == NULL || out == NULL) {
         return DVCO_CP_ERR_INVALID_ARG;
@@ -725,10 +782,12 @@ static int aesccm_decrypt(
         return DVCO_CP_ERR_INVALID_ARG;
     }
 
-    if (aad != NULL || aad_len != 0u) {
-        aesccm_set_error(a, "AAD not supported by AES-CCM provider v1");
-        return DVCO_CP_ERR_NOT_SUPPORTED;
+    if (aad == NULL && aad_len > 0u)
+    {
+        aesccm_set_error(a, "AAD is NULL with non-zero length");
+        return DVCO_CP_ERR_INVALID_ARG;
     }
+
 
     cipher = aesccm_select_evp_cipher(a);
     if (cipher == NULL) {
@@ -752,10 +811,17 @@ static int aesccm_decrypt(
     ct_len = in_len - 1u - (size_t)nonce_len - DVCO_AESCCM_TAG_LEN;
     tag = &in_data[in_len - DVCO_AESCCM_TAG_LEN];
 
-    if (ct_len > (size_t)INT_MAX) {
-        aesccm_set_error(a, "ciphertext too large for OpenSSL EVP CCM API");
+    if (ct_len > DVCO_AESCCM_MAX_MESSAGE_LEN)
+    {
+        aesccm_set_error(a, "ciphertext exceeds AES-CCM nonce-dependent limit");
         return DVCO_CP_ERR_INVALID_ARG;
     }
+
+    if (aad_len > (size_t)INT_MAX || ct_len > (size_t)INT_MAX)
+    {
+        aesccm_set_error(a, "AAD or ciphertext length exceeds OpenSSL limit");
+        return DVCO_CP_ERR_INVALID_ARG;
+    }    
 
     needed = ct_len;
 
@@ -768,6 +834,8 @@ static int aesccm_decrypt(
         out->len = needed;
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
+
+    out->len = 0u;
 
     evp = EVP_CIPHER_CTX_new();
     if (evp == NULL) {
@@ -802,6 +870,21 @@ static int aesccm_decrypt(
         goto done;
     }
 
+    if (aad_len > 0u)
+    {
+        if (EVP_DecryptUpdate(
+                evp,
+                NULL,
+                &aad_outl,
+                aad,
+                (int)aad_len
+            ) != 1)
+        {
+            aesccm_set_error(a, "EVP_DecryptUpdate(AAD) failed");
+            goto done;
+        }
+    }    
+
     if (EVP_DecryptUpdate(
             evp,
             out->data,
@@ -824,10 +907,21 @@ static int aesccm_decrypt(
     out->len = (size_t)outl1 + (size_t)outl2;
     rc = DVCO_CP_OK;
 
- done:
+done:
+    if (rc != DVCO_CP_OK)
+    {
+        if (out->data != NULL)
+        {
+            aesccm_secure_zero(out->data, needed);
+        }
+
+        out->len = 0u;
+    }
+
     if (evp != NULL) {
         EVP_CIPHER_CTX_free(evp);
     }
+
     return rc;
 }
 
