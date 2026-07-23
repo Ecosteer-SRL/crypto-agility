@@ -12,6 +12,9 @@
 //   - if key is omitted, rotate() must generate the runtime key
 //   - nonce is generated internally per encrypt()
 
+//  ver 1.2     23/07/2026
+//  memcmp -> CRYPTO_memcmp
+
 //  ver 1.1     22/07/2026
 //  added AAD support
 
@@ -432,7 +435,8 @@ static int ascon_compare_shareable(
         return DVCO_CP_ERR_PARSE;
     }
 
-    if (memcmp(&blob[DVCO_ASCON_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
+    // Use constant-time comparison: memcmp() would leak key bytes via response-time differences to an attacker-controlled blob.
+    if (CRYPTO_memcmp(&blob[DVCO_ASCON_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
         ascon_set_error(a, "shareable blob content mismatch");
         return DVCO_CP_ERR_PARSE;
     }

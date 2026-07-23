@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
 
 // conf:
 //   keybits=128|192|256          optional, default=256
 //   key=0x...                    optional, fixed initial key, must match keybits
+
+//  ver 1.1     23/07/2026
+//  memcmp -> CRYPTO_memcmp
+
 
 #include "ciphers/cipher_provider.h"
 #define DVCO_CIPHER_ID  2u
@@ -369,7 +373,8 @@ static int aes_compare_shareable(
         return DVCO_CP_ERR_PARSE;
     }
 
-    if (memcmp(&blob[DVCO_AES_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
+    // Use constant-time comparison: memcmp() would leak key bytes via response-time differences to an attacker-controlled blob.
+    if (CRYPTO_memcmp(&blob[DVCO_AES_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
         aes_set_error(a, "shareable blob content mismatch");
         return DVCO_CP_ERR_PARSE;
     }

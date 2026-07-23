@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.1
+// ver: 1.2
 
 
 // conf:
@@ -20,8 +20,13 @@
 // A fixed IV is intended only for deterministic probe/interoperability tests.
 // Reusing the same IV with the same AES-GCM key compromises security.
 
+//  ver 1.2     23/07/2026
+//  memcmp -> CRYPTO_memcmp
+
 //  ver 1.1     21/07/2026
 //  added AEAD aad support
+
+
 
 #include "ciphers/cipher_provider.h"
 #define DVCO_CIPHER_ID  5u
@@ -630,7 +635,8 @@ static int aesgcm_compare_shareable(
         return DVCO_CP_ERR_PARSE;
     }
 
-    if (memcmp(&blob[DVCO_AESGCM_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
+    // Use constant-time comparison: memcmp() would leak key bytes via response-time differences to an attacker-controlled blob.
+    if (CRYPTO_memcmp(&blob[DVCO_AESGCM_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
         aesgcm_set_error(a, "shareable blob content mismatch");
         return DVCO_CP_ERR_PARSE;
     }

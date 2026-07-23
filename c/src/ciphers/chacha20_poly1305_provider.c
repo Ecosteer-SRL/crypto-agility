@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.1
+// ver: 1.2
 
 // conf:
 //   key=0x...                    optional, fixed initial key, 32 bytes
@@ -10,6 +10,9 @@
 //   - unsupported keys => error
 //   - if key is omitted, rotate() must generate the runtime key
 //   - nonce is generated internally per encrypt()
+
+//  ver 1.2     23/07/2026
+//  memcmp -> CRYPTO_memcmp
 
 //  ver 1.1 20/07/2026
 //  1) the decrypt function on failure now reset the provisional plaintext
@@ -426,7 +429,8 @@ static int chacha20p1305_compare_shareable(
         return DVCO_CP_ERR_PARSE;
     }
 
-    if (memcmp(&blob[DVCO_CHACHA20P1305_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
+    // Use constant-time comparison: memcmp() would leak key bytes via response-time differences to an attacker-controlled blob.
+    if (CRYPTO_memcmp(&blob[DVCO_CHACHA20P1305_SHAREABLE_HDR_LEN], a->key, a->key_len) != 0) {
         chacha20p1305_set_error(a, "shareable blob content mismatch");
         return DVCO_CP_ERR_PARSE;
     }

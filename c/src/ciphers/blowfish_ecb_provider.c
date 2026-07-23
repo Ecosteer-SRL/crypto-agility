@@ -1,11 +1,22 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.0
+// ver: 1.1
+
+//  !!!! WARNING !!!!
+//  !!!! WARNING !!!!
+//  !!!! WARNING !!!!
+//  !!!! WARNING !!!!
+//  this cipher is supported only to show that it is possible to encapsulate
+//  even old (not to be used) ciphers
+//  DO NOT USE THIS CIPHER
 
 // conf:
 //   keybits=32..448              optional, default=128, must be a multiple of 8
 //   key=0x...                    optional, fixed initial key, must match keybits
+
+//  ver 1.1     23/07/2026
+//  memcmp -> CRYPTO_memcmp
 
 
 #include "ciphers/cipher_provider.h"
@@ -807,7 +818,8 @@ static int bf_compare_shareable(
         return DVCO_CP_ERR_PARSE;
     }
 
-    if (memcmp(blob + 1u, b->key, b->key_len) != 0) {
+    // Use constant-time comparison: memcmp() would leak key bytes via response-time differences to an attacker-controlled blob.
+    if (CRYPTO_memcmp(blob + 1u, b->key, b->key_len) != 0) {
         bf_set_error(b, "shareable blob content mismatch");
         return DVCO_CP_ERR_PARSE;
     }
