@@ -465,24 +465,51 @@ describes:
 
   - provider category through **category_flags**
 
+  - integrity-check requirements through **capability_flags**
+
   - padding expectations exposed to the upper layer
 
 The metadata is static for the provider implementation. In particular,
 **cid** is fixed per provider family and is not instance-specific
 runtime state.
 
-**category_flags** is also static provider metadata. It tells the caller
-which high-level provider category the implementation belongs to.
+**category_flags** and **capability_flags** are separate provider-level
+bitmasks with distinct purposes. Neither is instance-specific state.
 
-At the current stage, category_flags is used to distinguish at least:
+**category_flags** identifies the provider's high-level operation model.
+At the current stage it distinguishes:
 
   - symmetric providers
 
   - asymmetric providers
 
-This allows tools and upper layers to select the correct interpretation
-of shareable/private material and the correct test or benchmark path
-without changing the provider vtable.
+This allows tools and upper layers to interpret shareable/private material
+and select the appropriate test or benchmark path without changing the
+provider vtable.
+
+**capability_flags** is a 64-bit bitmask that communicates provider
+capabilities and operational requirements to the upper layer. In ABI 2.0,
+**CRAG_CAP_EXTERNAL_INTEGRITY_CHECK** specifies whether the upper layer
+must perform an additional integrity check after successful decryption:
+
+  - Set: the provider does not guarantee cryptographic plaintext integrity
+    verification; the upper layer MUST perform its configured external
+    integrity check before accepting the plaintext.
+
+  - Clear: successful decrypt() guarantees that the provider has
+    cryptographically verified plaintext integrity; verification failure
+    MUST cause decrypt() to fail.
+
+Unlike **category_flags**, **capability_flags** describes an actual
+provider guarantee or requirement, not an algorithm family. Providers
+in the same category may declare different capabilities. Every provider
+MUST explicitly initialize its capability flags according to its actual
+decryption behavior; an uninitialized or incompatible declaration must
+not be treated as an integrity guarantee.
+
+An external CRC or checksum may detect accidental corruption but does
+not provide cryptographic authentication. The detailed contract is
+specified under Provider Metadata Contract / Capability metadata.
 
 ## Provider instance state
 
@@ -575,14 +602,36 @@ The framework defines:
 
   - DVCO\_CIPHER\_PROVIDER\_API\_VERSION\_MINOR
 
-A provider must report a compatible ABI version through get\_info().
+A provider reports its ABI version through get\_info().
 
-The general expectation is:
+The versioning contract is:
 
-  - major version mismatch means ABI incompatibility
+  - a major version mismatch indicates incompatible ABI contracts; providers
+    and callers with different major versions MUST NOT be mixed
 
-  - minor version may allow backward-compatible evolution depending on
-    loader policy
+  - a minor version may describe backward-compatible additions, subject to
+    the documented ABI contract and the loader compatibility policy
+
+ABI 2.0 adds the 64-bit capability_flags member to
+dvco_cipher_provider_info_t. This changes the size and layout of the
+caller-allocated metadata structure and is not binary-compatible with ABI
+1.x. Providers, loaders, and callers must be rebuilt and deployed together
+against the ABI 2.0 definition before the new metadata is used.
+
+Compatibility limitation: the current plugin entry point returns a vtable,
+and the ABI version is reported only by get_info(). The entry point has no
+independent ABI-version negotiation parameter. Consequently, a loader cannot
+reliably reject an incompatible metadata layout before calling get_info()
+using this interface. In particular, an ABI 2.0 provider writing its larger
+metadata structure into an ABI 1.x caller's smaller allocation may corrupt
+memory before the caller can inspect abi_major.
+
+Therefore, a major-version check performed only after get_info() is not a
+sufficient protection against loading incompatible provider binaries. Until
+a pre-get_info() compatibility mechanism is introduced, the deployment must
+ensure that incompatible provider binaries are not loaded. ABI 2.0 metadata
+must only be trusted after the provider's compatibility and implementation
+have been established.
 
 ## Return codes
 
@@ -694,17 +743,19 @@ On success, out\_info must be fully initialized with:
 
   - cid
 
-  - category\_flags
-
   - pad\_apply
 
   - pad\_block\_size
+
+  - category\_flags
+
+  - capability\_flags
 
 ## Required semantics
 
 The provider must return stable metadata for the implementation.
 
-On success, **out_info** must be fully initialized with the provider metadata required by the stack: ABI version (**abi_major**, **abi_minor**), descriptive identity fields (**provider_name**, **provider_version**, **provider_desc**), the fixed provider identifier (**cid**), and the padding contract exposed to the upper layer (**pad_apply**, **pad_block_size**).
+On success, **out_info** must be fully initialized with the provider metadata required by the stack: ABI version (**abi_major**, **abi_minor**), descriptive identity fields (**provider_name**, **provider_version**, **provider_desc**), the fixed provider identifier (**cid**), and the padding contract exposed to the upper layer (**pad_apply**, **pad_block_size**), together with category and capability metadata (**category_flags**, **capability_flags**).
 
 The out_info structure itself (**dvco_cipher_provider_info_t**) is allocated by the caller and filled by the provider. The string fields provider_name, provider_version, and provider_desc are provider-owned read-only pointers, normally backed by static storage, and must remain valid for the lifetime of the provider implementation. The caller must treat these fields as immutable and must not modify or free them.
 
@@ -729,6 +780,25 @@ and protected.
 
 The caller must therefore interpret serialized material according to the
 provider category returned by get_info().
+
+The provider MUST explicitly assign **capability_flags** when populating
+**out_info**. It MUST NOT rely on an implicit zero value inherited from
+zero-initialization or from an older provider implementation. The declared
+bits must describe the actual behavior of the provider's decrypt() operation,
+not merely its algorithm name or category.
+
+For **CRAG_CAP_EXTERNAL_INTEGRITY_CHECK**, a set bit informs the upper layer
+that successful decrypt() does not guarantee cryptographic integrity of the
+plaintext and that an external integrity check is required before accepting
+it. A clear bit is an affirmative guarantee that decrypt() verifies plaintext
+integrity cryptographically and fails when verification does not succeed.
+
+The caller MUST interpret **capability_flags** only from compatible,
+validated ABI 2.0 provider metadata. It MUST apply the external integrity
+check when indicated, reject plaintext if that check fails, and MUST NOT
+infer an integrity guarantee from absent, incompatible, or untrusted metadata.
+As described under Capability metadata, a CRC or checksum provides corruption
+detection, not cryptographic authentication.
 
 ## Padding metadata
 
@@ -761,6 +831,62 @@ The current category flags are:
 A provider must set exactly the category bits that describe its high-level
 operation model.
 
+
+## Capability metadata
+
+capability_flags is a 64-bit bitmask returned by get_info(). It is distinct
+from category_flags and communicates provider characteristics or operational
+requirements to the upper layer. The value is static metadata describing the
+provider's decryption contract, not a per-message verification result.
+
+The first defined flag is:
+
+    #define CRAG_CAP_EXTERNAL_INTEGRITY_CHECK (UINT64_C(1) << 0)
+
+The flag has the following meaning:
+
+  - Set: successful decrypt() does not itself guarantee cryptographic
+    integrity verification of the plaintext. The upper layer MUST perform
+    an external integrity check before accepting the plaintext.
+
+  - Clear: the provider guarantees cryptographic integrity verification on
+    successful decrypt(). A verification failure MUST cause decrypt() to
+    return an error; unauthenticated plaintext MUST NOT be accepted.
+
+An unset bit is not an "unspecified" state: for an ABI 2.0 provider whose
+metadata has been validated, clearing this bit is an affirmative integrity
+guarantee. Therefore, a zero-initialized capability_flags value is safe only
+for a provider that actually enforces that guarantee. Providers MUST
+explicitly assign capability_flags according to their implemented behavior;
+relying on default zero-initialization is not sufficient.
+
+The upper layer MUST interpret the flag only after obtaining valid metadata
+from a compatible provider. If the flag is set, a successful decrypt() call
+alone is insufficient to accept the plaintext: the configured external check
+MUST succeed first, and any failure MUST cause the plaintext to be rejected.
+If the flag is clear, successful decrypt() provides the declared
+cryptographic integrity guarantee and no additional integrity check is
+required by this metadata contract. A decrypt() error MUST always cause the
+plaintext to be rejected, regardless of the flag value.
+
+The flag does not prescribe the external checking algorithm. A CRC or
+checksum can detect accidental corruption, but is not a cryptographic
+message authentication mechanism and does not protect against deliberate
+modification by an attacker. Consequently, satisfying the external-check
+requirement with a CRC MUST NOT be interpreted as providing the same
+security guarantee as authenticated decryption. Applications requiring
+cryptographic authenticity must select a suitable authenticated mechanism.
+
+Callers MUST NOT infer that integrity is verified from missing, unreadable,
+unknown, or incompatible metadata. Unknown capability bits do not override
+the defined meaning of CRAG_CAP_EXTERNAL_INTEGRITY_CHECK; callers must
+handle unrecognized bits according to their compatibility policy rather
+than treating them as additional security guarantees.
+
+As the clear state carries an affirmative security guarantee, ABI 2.0
+providers must be reviewed and updated before upper layers rely on this
+flag. In particular, mere zero-initialization by an unmodified provider
+is not sufficient evidence of authenticated decryption.
 
 ## Error conditions
 
@@ -812,11 +938,25 @@ Return static provider metadata.
 
 ### Caller responsibilities
 
-Allocate out\_info and pass a valid pointer.
+Allocate out\_info using the metadata structure defined by the supported
+provider ABI and pass a valid pointer.
+
+On successful return, read capability\_flags together with category\_flags
+and the remaining metadata. In particular, the caller MUST evaluate
+CRAG_CAP_EXTERNAL_INTEGRITY_CHECK before deciding whether decrypted plaintext
+requires external integrity verification. The caller MUST NOT infer an
+integrity guarantee from missing, unknown, or incompatible metadata.
 
 ### Provider responsibilities
 
-Fully initialize out\_info on success.
+Fully initialize out\_info on success, including capability\_flags, even
+when no capability bits are set. The provider MUST explicitly set
+CRAG_CAP_EXTERNAL_INTEGRITY_CHECK whenever successful decrypt() does not
+cryptographically verify plaintext integrity. The flag may be clear only when
+successful decrypt() guarantees integrity verification and failed verification
+returns an error without exposing unauthenticated plaintext.
+
+Report the ABI version corresponding to the implemented metadata structure.
 
 ### Return values
 
@@ -1500,6 +1640,25 @@ provider’s encrypt().
 The outer stack must not reinterpret or normalize provider ciphertext
 before passing it to decrypt().
 
+A successful decrypt() call indicates that the provider completed its
+own decryption contract; it does not, by itself, establish that plaintext
+integrity has been verified. The upper layer MUST interpret successful
+decryption together with the provider's capability_flags metadata.
+
+If CRAG_CAP_EXTERNAL_INTEGRITY_CHECK is set, the upper layer MUST perform
+an external integrity check and MUST NOT accept or process the plaintext
+unless that check succeeds.
+
+If CRAG_CAP_EXTERNAL_INTEGRITY_CHECK is clear, the provider guarantees
+cryptographic integrity verification as part of decrypt(). Any failed
+verification MUST cause decrypt() to return an error and MUST NOT expose
+unauthenticated plaintext. The upper layer may accept the plaintext after
+successful decryption without an additional integrity check, provided
+the provider metadata has been validated.
+
+An external CRC or checksum may detect accidental corruption but does
+not provide cryptographic authentication.
+
 ### Two-call sizing convention
 
 decrypt() should support the same two-call sizing pattern as encrypt()
@@ -1521,10 +1680,19 @@ input with DVCO\_CP\_ERR\_NOT\_SUPPORTED.
 
 ### AEAD authentication failures
 
-For AEAD providers, authentication or tag verification failure should
-return DVCO\_CP\_ERR\_CRYPTO.
+For AEAD providers, authentication or tag verification failure MUST
+return DVCO\_CP\_ERR\_CRYPTO. The provider MUST NOT expose plaintext
+on authentication failure, including when associated data (AAD) fails
+verification.
 
-The provider should not output plaintext on authentication failure.
+An AEAD provider MUST clear CRAG_CAP_EXTERNAL_INTEGRITY_CHECK only when
+its decrypt() implementation actually verifies authentication before
+returning DVCO\_CP\_OK. If this guarantee is not provided, the flag
+MUST be set, regardless of the underlying cipher's AEAD classification.
+
+The upper layer MUST reject a message when decrypt() reports an
+authentication failure. An external integrity check, including CRC,
+MUST NOT be used to override or recover from that failure.
 
 ### Error conditions
 
@@ -1805,6 +1973,26 @@ AAD semantics are provider-defined within the ABI
 
 shareable/private blobs are separate from ciphertext framing
 
+The upper layer must obtain capability_flags from the provider metadata
+returned by get_info() and use CRAG_CAP_EXTERNAL_INTEGRITY_CHECK to
+determine whether decrypted plaintext requires an additional integrity
+check before it can be accepted or processed.
+
+If CRAG_CAP_EXTERNAL_INTEGRITY_CHECK is set, successful decrypt() alone is
+not sufficient for plaintext acceptance. The upper layer MUST perform
+its external integrity check and MUST reject plaintext that fails it.
+If the flag is clear, successful decrypt() guarantees that the provider
+has cryptographically verified plaintext integrity; a verification
+failure MUST be reported by decrypt() as an error.
+
+The upper layer MUST NOT infer integrity guarantees solely from the
+provider category, cipher name, or the return of plaintext bytes. Missing
+or untrusted capability metadata MUST NOT be interpreted as assurance
+that integrity verification was performed.
+
+A CRC or checksum may serve as an external check against accidental
+corruption, but does not provide cryptographic authentication.
+
 ## Other considerations
 
 Provider may include internally
@@ -1844,6 +2032,17 @@ For AEAD providers:
   - failure should be reported as DVCO\_CP\_ERR\_CRYPTO
 
   - no plaintext should be exposed on auth failure
+
+An AEAD provider may clear CRAG_CAP_EXTERNAL_INTEGRITY_CHECK only if its
+decrypt() implementation actually verifies the authentication tag (and
+AAD, when applicable) before reporting success or exposing plaintext.
+A provider that does not enforce that verification MUST set the flag,
+regardless of whether its underlying cipher is classified as AEAD.
+
+The upper layer MUST treat a decrypt() authentication failure as a
+rejected message. It MUST NOT attempt to accept or recover the plaintext
+by substituting an external CRC or checksum for the failed cryptographic
+verification.
 
 # Error Model and State Semantics
 
@@ -2010,6 +2209,16 @@ A developer implementing a new provider should follow this checklist.
 
   - report correct ABI version
 
+  - fully initialize all fields returned by get_info(), including
+    category_flags, capability_flags, pad_apply, and pad_block_size
+
+  - explicitly set capability_flags according to the decrypt() integrity contract;
+    set CRAG_CAP_EXTERNAL_INTEGRITY_CHECK if successful decryption does not
+    cryptographically verify plaintext integrity
+
+  - clear CRAG_CAP_EXTERNAL_INTEGRITY_CHECK only when decrypt() rejects
+    failed integrity verification and never exposes unauthenticated plaintext
+
 ## Step 2: define the provider context
 
   - create an internal struct behind dvco\_cipher\_ctx\_t
@@ -2170,6 +2379,23 @@ Test at minimum:
 
   - ciphertext round-trip
 
+  - get_info() fully initializes every metadata field and reports ABI 2.0
+
+  - category_flags and capability_flags match the provider's actual behavior
+
+  - capability_flags drives the correct external integrity-check decision
+    in the upper layer
+
+  - providers that set CRAG_CAP_EXTERNAL_INTEGRITY_CHECK are handled by an
+    upper-layer path that performs the required external integrity check
+
+  - providers that clear CRAG_CAP_EXTERNAL_INTEGRITY_CHECK reject modified
+    ciphertext, invalid authentication tags, and incorrect AAD where supported;
+    authentication failure must not expose usable plaintext
+
+  - an external CRC/checksum is tested as corruption detection, not treated
+    as cryptographic authentication
+
 # Example Provider Classes
 
 ## Padded block cipher provider
@@ -2194,6 +2420,9 @@ Main documentation focus:
 
   - whether library-side padding is relied upon
 
+  - set CRAG_CAP_EXTERNAL_INTEGRITY_CHECK unless the provider
+    cryptographically verifies plaintext integrity during decryption
+
 ## Non-padded stream-like provider
 
 Typical characteristics:
@@ -2213,6 +2442,9 @@ Main documentation focus:
   - no padding assumptions
 
   - exact decrypt acceptance contract
+
+  - set CRAG_CAP_EXTERNAL_INTEGRITY_CHECK unless the provider
+    cryptographically verifies plaintext integrity during decryption
 
 ## AEAD provider
 
@@ -2236,6 +2468,9 @@ Main documentation focus:
   - distinction between parse failure and auth failure
 
   - no plaintext output on auth failure
+
+  - clear CRAG_CAP_EXTERNAL_INTEGRITY_CHECK only when decrypt()
+    verifies authentication and rejects unauthenticated plaintext
 
 ## Asymmetric encryption provider
 
@@ -2265,6 +2500,10 @@ Main documentation focus:
   - padding or encoding scheme
 
   - whether rotate() generates a new key pair or activates existing material  
+
+  - declare CRAG_CAP_EXTERNAL_INTEGRITY_CHECK according to the actual
+    integrity guarantees of decrypt(), including any hybrid
+    authenticated-encryption scheme
 
 # Final Notes for Provider Authors
 

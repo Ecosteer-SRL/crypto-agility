@@ -2,7 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.1
+// ver: 2.0
+
+
+//  ver: 2.0
+//  The field capability_flag has been added to struct dvco_cipher_provider_info_s
+//  The upper solution layer should check this field to decide if any extra integrity
+//  check must (or must not) be applied to the cleartext.
 
 //  ver: 1.1
 //  The field category_flag has been added to struct dvco_cipher_provider_info_s
@@ -34,8 +40,8 @@ extern "C" {
  * ABI / API VERSIONING
  * ========================= */
 
-#define DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR 1u
-#define DVCO_CIPHER_PROVIDER_API_VERSION_MINOR 1u
+#define DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR 2u
+#define DVCO_CIPHER_PROVIDER_API_VERSION_MINOR 0u
 
 /* =========================
  * CATEGORY FLAGS
@@ -64,6 +70,17 @@ extern "C" {
 #define CRAG_PROVIDER_CATEGORY_UNSPECIFIED  0x0000u
 #define CRAG_PROVIDER_CATEGORY_SYMMETRIC    0x0001u
 #define CRAG_PROVIDER_CATEGORY_ASYMMETRIC   0x0002u
+
+/* =========================
+ * CAPABILITY FLAGS
+ * ========================= */
+
+// The upper layer MUST perform an external integrity check
+// on the plaintext after successful decryption when this flag is set.
+// This flag has been introduced in order to allow optimization in the upper layer:
+// integrity check has to be performed only when necessary
+
+#define CRAG_CAP_EXTERNAL_INTEGRITY_CHECK (UINT64_C(1) << 0)    // Upper layer MUST verify plaintext integrity after decryption
 
 /* =========================
  * COMMON TYPES
@@ -135,6 +152,7 @@ typedef struct dvco_cipher_provider_info_s {
     size_t pad_block_size;          //  in case the upper layer must apply padding - it will have to use this block size
 
     uint16_t category_flags;        //  tells the upper layer how to treat shareable/private material
+    uint64_t capability_flags;      //  bitmask indicating provider capabilities and upper-layer requirements
 
 } dvco_cipher_provider_info_t;
 

@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.5
+// ver: 2.0 2026-10-23
+
+//  ver: 2.0
+//  capability_flag added
 
 // bench_cipher_provider.c
 //
@@ -58,6 +61,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -228,6 +232,51 @@ static int validate_provider_category(const dvco_cipher_provider_info_t *info) {
     if (category != CRAG_PROVIDER_CATEGORY_SYMMETRIC &&
         category != CRAG_PROVIDER_CATEGORY_ASYMMETRIC) {
         fprintf(stderr, "Unsupported provider category: %u\n", (unsigned)category);
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    return DVCO_CP_OK;
+}
+
+static int validate_provider_metadata
+(
+    const dvco_cipher_provider_info_t *info
+)
+{
+    const uint64_t supported_capabilities =
+        CRAG_CAP_EXTERNAL_INTEGRITY_CHECK;
+
+    if (info == NULL)
+    {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (info->abi_major != DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR)
+    {
+        fprintf(stderr,
+            "Unsupported provider ABI major: %u (expected %u)\n",
+            (unsigned)info->abi_major,
+            (unsigned)DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR);
+
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    if (info->abi_minor > DVCO_CIPHER_PROVIDER_API_VERSION_MINOR)
+    {
+        fprintf(stderr,
+            "Unsupported provider ABI minor: %u (maximum supported %u)\n",
+            (unsigned)info->abi_minor,
+            (unsigned)DVCO_CIPHER_PROVIDER_API_VERSION_MINOR);
+
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    if ((info->capability_flags & ~supported_capabilities) != UINT64_C(0))
+    {
+        fprintf(stderr,
+            "Unsupported provider capability flags: 0x%016" PRIx64 "\n",
+            info->capability_flags & ~supported_capabilities);
+
         return DVCO_CP_ERR_NOT_SUPPORTED;
     }
 
@@ -1260,6 +1309,15 @@ static void print_results
            (unsigned)get_main_category(info));
     printf("category variant      : %u\n", (unsigned)get_category_variant(info));
     printf("category raw          : 0x%04x\n", (unsigned)info->category_flags);
+
+    printf("capability flags      : 0x%016" PRIx64 "\n",
+        info->capability_flags);
+
+    printf("external integrity    : %s\n",
+        (info->capability_flags & CRAG_CAP_EXTERNAL_INTEGRITY_CHECK)
+            ? "REQUIRED"
+            : "NOT REQUIRED");
+                      
     printf("cleartext size        : %zu bytes\n", cfg->plain_len);
     printf("encrypt input size    : %zu bytes\n", encrypt_input_len);
     printf("ciphertext size       : %zu bytes\n", ciphertext_len);
@@ -1400,6 +1458,12 @@ int main(int argc, char **argv) {
         print_provider_op_error("get_info", rc, api, NULL);
         goto done;
     }
+
+    rc = validate_provider_metadata(&info);
+    if (rc != DVCO_CP_OK)
+    {
+        goto done;
+    }    
 
     rc = validate_provider_category(&info);
     if (rc != DVCO_CP_OK) {

@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.1
+// ver: 2.0 2026-10-23
+
+//  ver: 2.0
+//  capability_flag added
+
 
 /*
     probe_cipher_provider.c
@@ -30,6 +34,7 @@
 #include <ctype.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -795,6 +800,50 @@ done:
     return result;
 }
 
+static int validate_provider_metadata
+(
+    const dvco_cipher_provider_info_t *info
+)
+{
+    const uint64_t supported_capabilities =
+        CRAG_CAP_EXTERNAL_INTEGRITY_CHECK;
+
+    if (info == NULL)
+    {
+        return DVCO_CP_ERR_INVALID_ARG;
+    }
+
+    if (info->abi_major != DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR)
+    {
+        fprintf(stderr,
+            "Unsupported provider ABI major: %u (expected %u)\n",
+            (unsigned)info->abi_major,
+            (unsigned)DVCO_CIPHER_PROVIDER_API_VERSION_MAJOR);
+
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    if (info->abi_minor > DVCO_CIPHER_PROVIDER_API_VERSION_MINOR)
+    {
+        fprintf(stderr,
+            "Unsupported provider ABI minor: %u (maximum supported %u)\n",
+            (unsigned)info->abi_minor,
+            (unsigned)DVCO_CIPHER_PROVIDER_API_VERSION_MINOR);
+
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    if ((info->capability_flags & ~supported_capabilities) != UINT64_C(0))
+    {
+        fprintf(stderr,
+            "Unsupported provider capability flags: 0x%016" PRIx64 "\n",
+            info->capability_flags & ~supported_capabilities);
+
+        return DVCO_CP_ERR_NOT_SUPPORTED;
+    }
+
+    return DVCO_CP_OK;
+}
 
 
 int main(int argc, char **argv)
@@ -874,6 +923,13 @@ int main(int argc, char **argv)
         goto done;
     }
 
+    rc = validate_provider_metadata(&info);
+    print_rc("validate_provider_metadata", rc);
+    if (rc != DVCO_CP_OK)
+    {
+        goto done;
+    }    
+
     printf("Provider info:\n");
     printf("  abi            : %u.%u\n", info.abi_major, info.abi_minor);
     printf("  name           : %s\n", info.provider_name ? info.provider_name : "(null)");
@@ -881,6 +937,14 @@ int main(int argc, char **argv)
     printf("  cid            : %u\n", (unsigned)info.cid);
     printf("  pad_apply      : %s\n", info.pad_apply ? "true" : "false");
     printf("  pad_block_size : %zu\n", info.pad_block_size);
+
+    printf("  capability flags : 0x%016" PRIx64 "\n",
+        info.capability_flags);
+
+    printf("  external integrity check : %s\n",
+        (info.capability_flags & CRAG_CAP_EXTERNAL_INTEGRITY_CHECK)
+            ? "REQUIRED"
+            : "NOT REQUIRED");    
 
     exit_code = run_probe(api, &info, &kv, plain_bytes, plain_len, aad_bytes, aad_len, cfg.plain);
     if(exit_code == 0) {

@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Daniel Grazioli (graz)
 // SPDX-FileCopyrightText: 2026 Ecosteer srl
 // SPDX-License-Identifier: MIT
-// ver: 1.1
+// ver: 2.0 2026-10-23
+
+//  ver: 2.0
+//  capability_flag added
 
 //  !!!! WARNING !!!!
 //  !!!! WARNING !!!!
@@ -641,6 +644,7 @@ static int bf_get_info(dvco_cipher_provider_info_t *out_info)
 #endif        
     out_info->pad_block_size    = 8;
     out_info->category_flags    = CRAG_PROVIDER_CATEGORY_SYMMETRIC;
+    out_info->capability_flags  = CRAG_CAP_EXTERNAL_INTEGRITY_CHECK;
     return DVCO_CP_OK;
 }
 
