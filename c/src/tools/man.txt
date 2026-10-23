@@ -55,6 +55,16 @@ Example:
   --plain "hello dvco" \
   --aad "product-123"
 
+Limitation:
+The current test utility does not support zero-length plaintext. Its decryption
+helper treats a successful size query returning zero bytes as an error.
+
+This is a limitation of the test utility, not necessarily of the cipher provider.
+AEAD providers may legitimately authenticate empty plaintext, including messages
+containing only Additional Authenticated Data (AAD).
+
+A future update will support zero-length plaintext while ensuring that actual
+decryption and authentication are still performed.
 
 ====================================================
 bench_cipher_provider

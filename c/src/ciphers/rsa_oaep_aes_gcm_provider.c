@@ -523,6 +523,7 @@ static int rsa_env_aes_gcm_decrypt(
     int outl = 0;
     int tmplen = 0;
     int final_rc;
+    size_t plaintext_written_possible = 0u;
     int rc = DVCO_CP_ERR_CRYPTO;
 
     if (ctx == NULL || key == NULL || nonce == NULL || tag == NULL || plaintext == NULL) {
@@ -568,6 +569,8 @@ static int rsa_env_aes_gcm_decrypt(
             goto done;
         }
 
+        // Output may be modified even if EVP_DecryptUpdate returns an error.
+        plaintext_written_possible = ciphertext_len;
         if (EVP_DecryptUpdate(gctx, plaintext, &outl, ciphertext, (int)ciphertext_len) != 1) {
             rsa_env_set_error(ctx, "EVP_DecryptUpdate ciphertext failed");
             goto done;
@@ -589,6 +592,11 @@ static int rsa_env_aes_gcm_decrypt(
     rc = DVCO_CP_OK;
 
 done:
+    if (rc != DVCO_CP_OK && plaintext_written_possible > 0u) {
+        // Never expose provisional plaintext after failed authentication.
+        rsa_env_secure_zero(plaintext, plaintext_written_possible);
+    }
+
     if (gctx != NULL) {
         EVP_CIPHER_CTX_free(gctx);
     }
@@ -1224,6 +1232,9 @@ static int rsa_env_decrypt(
         out->len = ciphertext_len;
         return DVCO_CP_ERR_BUFFER_TOO_SMALL;
     }
+
+    // No authenticated plaintext is available until decryption succeeds.
+    out->len = 0u;
 
     p = in_data + DVCO_RSA_ENV_FRAME_HEADER_LEN;
     wrapped = p;
